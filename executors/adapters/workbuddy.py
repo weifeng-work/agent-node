@@ -147,8 +147,19 @@ class WorkBuddyPlugin(ExecutorPlugin):
                              f"结果文件未生成且未回收到回复文本: {file_result.content or ''}")
 
     # ---------- 注入核心（复用 agent-bus 已验证实现） ----------
+    @staticmethod
+    def _ensure_com() -> None:
+        """comtypes COM 线程亲和: pywinauto 在新线程中使用前必须初始化当前线程 COM
+        （否则 UIA 调用全部静默失败——表现为"找不到 Edit 控件"）。"""
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+        except Exception:
+            pass
+
     def _connect_window(self, wait: float = 20.0):
         from pywinauto import Application
+        self._ensure_com()
         deadline = time.time() + wait
         last_err = None
         while time.time() < deadline:
@@ -213,40 +224,67 @@ class WorkBuddyPlugin(ExecutorPlugin):
             raise RuntimeError("UIA 树中未找到输入框 Edit 控件")
         return best
 
-    def _inject_prompt(self, prompt: str, task_tag: str):
+    def _inject_prompt(self, prompt: str, task_tag: str, inject_timeout: float = 120.0):
+        """deeplink 预填 + UIA 提交。整体重试（Electron 树渲染有时延，
+        单次找不到 Edit 不算失败），提交成功 = 对话区出现含任务短码的消息。"""
         from pywinauto.keyboard import send_keys
-        _, dlg = self._connect_window()
         url = DEEPLINK_PREFIX + quote(prompt)
         if len(url) > MAX_URL_LEN:
             # 过长截断保护：保留结果文件指令（尾部靠前段提示词承载任务）
             prompt = prompt[:2000]
             url = DEEPLINK_PREFIX + quote(prompt)
         os.startfile(url)  # ShellExecute 直达；绝不能过 cmd（& 会被截断）
-        time.sleep(2.5)
-        for attempt in range(3):
-            dlg = self._connect_window(wait=10)[1]
+        deadline = time.time() + inject_timeout
+        last_err = "未尝试"
+        while time.time() < deadline:
+            time.sleep(3.0)  # 等 deeplink 预填 + Electron 树渲染
             try:
-                dlg.set_focus()
-            except Exception:
-                pass
-            edit = self._find_input_edit(dlg)
-            edit.click_input()
-            time.sleep(0.5)
-            send_keys("{ENTER}")
-            time.sleep(SUBMIT_WAIT)
-            texts_now = [n for _, n in self._walk(dlg, ("Text", "ListItem", "Button"))]
-            if any(task_tag in n for n in texts_now):
-                return
-            # "覆盖当前草稿"弹窗自愈
+                dlg = self._connect_window(wait=10)[1]
+                # 先处理「覆盖当前草稿？」模态（上次未发送内容 + 新 deeplink 触发，
+                # 模态期间 Edit 不可达——必须先点掉）
+                self._dismiss_draft_dialog(dlg)
+                try:
+                    dlg.set_focus()
+                except Exception:
+                    pass
+                edit = self._find_input_edit(dlg)
+                edit.click_input()          # 真实点击聚焦（负坐标副屏同样有效）
+                time.sleep(0.5)
+                send_keys("{ENTER}")
+                time.sleep(SUBMIT_WAIT)
+                # 提交成功判定（双条件）: 对话区出现含任务短码的消息 且 输入框已清空
+                # （预填后输入框本身含短码——仅看对话区会误判未提交为已提交）
+                texts_now = [n for _, n in self._walk(dlg, ("Text", "ListItem", "Button"))]
+                edit_texts = []
+                try:
+                    edit2 = self._find_input_edit(dlg)
+                    edit_texts = [n for _, n in self._walk(edit2, ("Text", "ListItem"))]
+                except Exception:
+                    pass
+                conv_has_tag = any(task_tag in n for n in texts_now)
+                edit_has_tag = any(task_tag in n for n in edit_texts)
+                if conv_has_tag and not edit_has_tag:
+                    return
+                # 可能弹了"覆盖当前草稿"确认框：点掉后重试
+                self._dismiss_draft_dialog(dlg)
+                last_err = "提交后未在对话区检出任务消息（可能仍在渲染）"
+            except Exception as e:
+                last_err = str(e)
+        raise RuntimeError(f"deeplink 预填/ENTER 提交失败: {last_err}")
+
+    def _dismiss_draft_dialog(self, dlg) -> None:
+        """点掉「覆盖当前草稿？」模态（覆盖=用新任务继续）。"""
+        try:
             for _, n in self._walk(dlg, ("Button",)):
                 if n and ("覆盖" in n or n == "确定"):
                     try:
                         dlg.child_window(title=n, control_type="Button").click_input()
-                        time.sleep(1.0)
+                        time.sleep(1.5)
                     except Exception:
                         pass
-                    break
-        raise RuntimeError("deeplink 预填/ENTER 提交失败（3 次尝试均未在对话区发现任务消息）")
+                    return
+        except Exception:
+            pass
 
     # ---------- UIA 兜底回收（复用 agent-bus 轮询逻辑） ----------
     def _harvest_loop(self, task: TaskInput):

@@ -2,6 +2,47 @@
 
 本项目按 [重构设计方案.md](docs/重构设计方案.md) 施工，每阶段记录于此。
 
+## [0.3.0] - 2026-08-20 阶段三：双机全能力验收通过（23/23）+ WorkBuddy 实调成功
+
+### 双机部署（本机 Admin-PC ↔ IKUN-PC DESKTOP-F9P3UKK）
+- IKUN 部署: ssh 推送 + tar 解压 + pip（Python 3.14: fastapi/uvicorn/pywinauto 全兼容）
+- IKUN 节点经**计划任务（Interactive）在用户桌面会话运行**（session 1——UIA 驱动
+  WorkBuddy 的硬前提；ssh 直接启动在 session 0 无桌面，UIA 不可用）
+- 双端固定 peer_tcp_port=41840；防火墙按程序放行（python/pythonw/syncthing）
+- Syncthing v1.29.4 二进制随包分发双端
+
+### 阶段三关键修复（双机实测暴露）
+- **WorkBuddy「覆盖当前草稿？」模态**: 上次未发送内容 + 新 deeplink 触发模态，
+  模态期间 Edit 不可达 → 注入循环每轮先点掉模态再找输入框
+- **comtypes COM 线程亲和**: pywinauto 首次导入线程结束后，新工作线程 COM 未初始化
+  → UIA 全静默失败（表现为"找不到 Edit 控件"）→ 连接窗口前确保当前线程 CoInitialize
+- **提交成功判定**: 预填后输入框本身含任务短码 → 改双条件（对话区含短码 且 输入框已清空）
+- **注入整体重试 120s**: Electron UI 线程忙时 UIA 附加超时为瞬态（上次任务渲染中）
+- keepalive ping 的 msg_id 与追踪 pid 分离导致 pong 永不匹配 → 15 秒必断 churn
+  （本地测试因操作落在存活窗口内而侥幸通过——真实双机暴露）
+- 255.255.255.255 广播部分 Windows 不收（实测定向 UDP/子网广播可达）→
+  beacon 三路送达: 全网广播 + 子网定向广播(192.168.x.255) + 已知对端单播
+- Syncthing REST: 列表端点 PUT 需数组 → 按 id 端点；设备地址加显式 tcp://IP:22000
+- known_peers upsert 空值覆盖（握手回调 name=None 抹掉 beacon 名称）→ COALESCE
+- 异步回执重试循环逻辑颠倒（到期才重试）→ 每 20s 重试至 deadline
+- uvicorn 默认日志配置在 Python 3.14 报错 → log_config=None
+
+### 验收结果（scripts/test_dual_machine.py --with-workbuddy: 23/23 PASS）
+- 发现/连接: beacon 自动发现 + mesh 握手 + 能力广播（含 workbuddy）+ 在线检测
+- 聊天: 双端落库；远程命令: echo 回显；开关拒绝路径（此前测试覆盖）
+- 文件: push（SHA-256 校验+内容回读）/pull/远程目录列表/附件直传到任务工作目录
+- 执行器: 远程深态查询（workbuddy available/idle）
+- 任务: sync/async（回执进 caller 私有邮箱）/trigger（触发确认）/task_id 幂等
+- **WorkBuddy 实调**: 本机提交 → IKUN 适配器 deeplink+UIA 注入 → WorkBuddy 执行 →
+  结果文件契约回收 result.md → 回传本机（WorkBuddy 回复确认链路正常）
+- 同步: 本机 data/sync 写入 → 25 秒内出现于 IKUN data/sync（beacon 自动互配生效）
+- 通信日志 50+ 条审计；diag 自检全绿
+
+## [0.2.0] - 2026-08-20 阶段二：双机部署与连通修复
+
+- 双机 mesh 打通；beacon/keepalive/异步回执三处核心修复（详见 0.3.0 修复清单）
+- IKUN 计划任务交互会话部署方案落地
+
 ## [0.1.0] - 2026-08-20 阶段一：核心施工 + 本地全量测试通过（47/47）
 
 ### 新增 —— transport 层（附录 A 线级协议）
