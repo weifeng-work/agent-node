@@ -18,3 +18,7 @@ env/
 .idea/
 .vscode/
 *.swp
+
+deploy.tgz
+bin/
+data/
