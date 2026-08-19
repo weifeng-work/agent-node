@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-node 节点面板</title>
+<style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --panel2: #1c2128; --border: #2d333b;
+  --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950;
+  --red: #f85149; --yellow: #d29922; --purple: #bc8cff;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 14px;
+  display: flex; height: 100vh; overflow: hidden;
+}
+/* ---- 顶部状态灯 ---- */
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 100;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px; padding: 0 16px;
+}
+#status-light {
+  width: 12px; height: 12px; border-radius: 50%; background: var(--muted);
+  box-shadow: 0 0 8px var(--muted); flex-shrink: 0;
+}
+#status-light.running { background: var(--green); box-shadow: 0 0 10px var(--green); animation: pulse 2s infinite; }
+#status-light.busy { background: var(--yellow); box-shadow: 0 0 10px var(--yellow); animation: pulse 0.8s infinite; }
+@keyframes pulse { 50% { opacity: 0.55; } }
+#topbar .title { font-weight: 600; color: var(--accent); }
+#topbar .sub { color: var(--muted); font-size: 12px; }
+#topbar .spacer { flex: 1; }
+.notif-dot { background: var(--red); color: #fff; border-radius: 10px; padding: 1px 7px; font-size: 11px; }
+/* ---- 侧边导航 ---- */
+#nav {
+  width: 168px; flex-shrink: 0; margin-top: 44px; background: var(--panel);
+  border-right: 1px solid var(--border); padding: 10px 8px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+#nav a {
+  color: var(--text); text-decoration: none; padding: 9px 12px; border-radius: 6px;
+  cursor: pointer; transition: background .15s;
+}
+#nav a:hover { background: var(--panel2); }
+#nav a.active { background: #22304a; color: var(--accent); font-weight: 600; }
+/* ---- 内容区 ---- */
+#content { flex: 1; margin-top: 44px; overflow-y: auto; padding: 18px 22px; }
+.view { display: none; }
+.view.active { display: block; }
+h2 { font-size: 16px; margin-bottom: 14px; color: var(--accent); }
+h3 { font-size: 13px; margin: 14px 0 8px; color: var(--muted); text-transform: uppercase; }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 12px;
+}
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+th { color: var(--muted); font-weight: 500; }
+tr:hover td { background: var(--panel2); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+.badge.on { background: #12351f; color: var(--green); }
+.badge.off { background: #3d1d1d; color: var(--red); }
+.badge.gray { background: #2d333b; color: var(--muted); }
+.badge.blue { background: #12283f; color: var(--accent); }
+.badge.purple { background: #241a38; color: var(--purple); }
+.badge.yellow { background: #3a2c10; color: var(--yellow); }
+.btn {
+  background: #21262d; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+  transition: all .15s;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: #1f3a5f; border-color: #2f6fb0; color: var(--accent); }
+.btn.danger { background: #3d1d1d; border-color: #8b3434; color: var(--red); }
+.btn.small { padding: 3px 9px; font-size: 12px; }
+.btn.off-state { background: #3d1d1d; border-color: #8b3434; }
+input, select, textarea {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 100%;
+}
+input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+.unsaved { border-color: var(--yellow) !important; box-shadow: 0 0 4px rgba(210,153,34,.4); }
+.row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.row label { min-width: 90px; color: var(--muted); }
+.kv { display: flex; gap: 8px; padding: 3px 0; }
+.kv .k { color: var(--muted); min-width: 110px; }
+.kv .v { word-break: break-all; }
+.mono { font-family: Consolas, monospace; font-size: 12px; }
+#toast {
+  position: fixed; bottom: 20px; right: 20px; z-index: 999; display: flex;
+  flex-direction: column; gap: 8px; max-width: 380px;
+}
+.toast-item {
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
+  padding: 10px 14px; font-size: 13px; box-shadow: 0 4px 14px rgba(0,0,0,.5);
+  animation: slidein .25s;
+}
+.toast-item.error { border-color: var(--red); }
+@keyframes slidein { from { transform: translateX(40px); opacity: 0; } }
+/* ---- 聊天 ---- */
+#chat-layout { display: flex; gap: 12px; height: calc(100vh - 110px); }
+#chat-left { width: 240px; flex-shrink: 0; overflow-y: auto; }
+#chat-left .conv {
+  padding: 10px 12px; border-radius: 6px; cursor: pointer; margin-bottom: 4px;
+  border: 1px solid transparent;
+}
+#chat-left .conv:hover { background: var(--panel2); }
+#chat-left .conv.active { background: #22304a; border-color: #2f6fb0; }
+#chat-right { flex: 1; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+#chat-msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.bubble { max-width: 72%; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+.bubble.out { align-self: flex-end; background: #1f3a5f; border: 1px solid #2f6fb0; }
+.bubble.in { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border); }
+.bubble .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+#chat-input-bar { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border); }
+#chat-input { flex: 1; }
+/* ---- 文件浏览器 ---- */
+#file-layout { display: flex; gap: 12px; }
+#file-browser { flex: 1; }
+#file-side { width: 280px; flex-shrink: 0; }
+.crumbs { margin-bottom: 8px; display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.crumbs span { color: var(--muted); }
+.crumbs a { color: var(--accent); cursor: pointer; }
+pre.logbox {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; font-family: Consolas, monospace; font-size: 12px;
+  white-space: pre-wrap; max-height: 60vh; overflow-y: auto;
+}
+.notif-item { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.notif-item .t { color: var(--muted); font-size: 11px; }
+.switch-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.switch { position: relative; width: 42px; height: 22px; background: #2d333b; border-radius: 11px; cursor: pointer; transition: background .2s; flex-shrink: 0; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background: var(--muted); border-radius: 50%; transition: all .2s; }
+.switch.on { background: #12351f; }
+.switch.on::after { left: 22px; background: var(--green); }
+.hint { color: var(--muted); font-size: 12px; }
+#modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 500; display: none; align-items: center; justify-content: center; }
+#modal-mask.show { display: flex; }
+#modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; width: 520px; max-height: 80vh; overflow-y: auto; }
+#modal h3 { margin-top: 0; }
+textarea#task-prompt { min-height: 110px; resize: vertical; }
+select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
+.full { width: 100% !important; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <div id="status-light" class="running"></div>
+  <span class="title" id="tb-name">agent-node</span>
+  <span class="sub mono" id="tb-nodeid"></span>
+  <span class="sub" id="tb-status"></span>
+  <div class="spacer"></div>
+  <span class="sub" id="tb-sync"></span>
+  <span class="badge gray" id="tb-notif" style="cursor:pointer" onclick="switchView('overview')">通知 0</span>
+</div>
+<div id="nav">
+  <a data-view="overview" class="active">概览</a>
+  <a data-view="nodes">节点</a>
+  <a data-view="chat">消息</a>
+  <a data-view="files">文件</a>
+  <a data-view="executors">执行器</a>
+  <a data-view="logs">日志</a>
+  <a data-view="settings">设置</a>
+</div>
+<div id="content">
+
+<div class="view active" id="view-overview">
+  <h2>概览</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>本机状态</h3>
+      <div id="ov-info"></div>
+    </div>
+    <div class="card">
+      <h3>三个开关（切换即时生效）</h3>
+      <div id="ov-switches"></div>
+      <p class="hint">开关只管远程请求；本机 AI 全权（2.9.4）。关闭后仍可被发现。</p>
+    </div>
+    <div class="card">
+      <h3>本机执行器摘要</h3>
+      <div id="ov-executors"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>通知</h3>
+    <div id="ov-notifications"></div>
+  </div>
+</div>
+
+<div class="view" id="view-nodes">
+  <h2>已知节点（离线不消失）</h2>
+  <div class="card">
+    <table id="nodes-table">
+      <thead><tr>
+        <th>名称</th><th>node_id</th><th>team</th><th>状态</th><th>能力</th>
+        <th>开关</th><th>地址</th><th>上次在线</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>手动添加节点（跨网段兜底）</h3>
+    <div class="row">
+      <input type="text" id="mp-host" placeholder="IP 或主机名" style="min-width:200px">
+      <input type="number" id="mp-port" placeholder="对等 TCP 端口" style="min-width:140px">
+      <button class="btn primary" onclick="addManualPeer()">添加</button>
+      <span class="hint">被添加方需配置固定 peer_tcp_port</span>
+    </div>
+    <div id="mp-list"></div>
+  </div>
+</div>
+
+<div class="view" id="view-chat">
+  <h2>消息</h2>
+  <div id="chat-layout">
+    <div id="chat-left" class="card" style="padding:8px"><div id="conv-list"></div></div>
+    <div id="chat-right">
+      <div id="chat-msgs"><p class="hint" style="margin:auto">选择左侧会话开始聊天</p></div>
+      <div id="chat-input-bar">
+        <input id="chat-input" placeholder="输入消息，Enter 发送（仅对方在线可发）">
+        <button class="btn primary" onclick="sendChat()">发送</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="view" id="view-files">
+  <h2>文件浏览器</h2>
+  <div id="file-layout">
+    <div class="card" id="file-browser">
+      <div class="row">
+        <select id="fb-node"></select>
+        <button class="btn small" onclick="fbGoRoot()">根目录</button>
+        <button class="btn small" onclick="fbUp()">上一级</button>
+        <label class="btn small" style="cursor:pointer">
+          上传到当前目录<input type="file" id="fb-upload" style="display:none" multiple onchange="fbUpload(this)">
+        </label>
+      </div>
+      <div class="crumbs" id="fb-crumbs"></div>
+      <div style="max-height:56vh; overflow-y:auto">
+        <table id="fb-table"><thead><tr>
+          <th>名称</th><th>类型</th><th>大小</th><th>操作</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <div id="file-side">
+      <div class="card">
+        <h3>快捷目录</h3>
+        <p><a style="color:var(--accent);cursor:pointer" onclick="fbLocal('inbox')">本机收件目录 data/inbox/</a></p>
+        <p><a style="color:var(--accent);cursor:pointer" onclick="fbLocal('sync')">同步目录 data/sync/</a></p>
+      </div>
+      <div class="card">
+        <h3>推送本地文件</h3>
+        <div class="row"><input type="text" id="fp-local" placeholder="本机绝对路径"></div>
+        <div class="row"><input type="text" id="fp-target" placeholder="目标路径（空=收件目录）"></div>
+        <button class="btn primary" onclick="pushFile()">推送 push</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="view" id="view-executors">
+  <h2>执行器（本机 + 远程统一）</h2>
+  <div class="card">
+    <table id="exec-table">
+      <thead><tr>
+        <th>归属节点</th><th>名称</th><th>executor_id</th><th>类型</th>
+        <th>状态</th><th>并发/在途</th><th>前提条件</th><th>操作</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="hint">远程执行器默认只显示 beacon 能力列表；深态按「查询」获取（受目标 allow_ai_task 管辖）。</p>
+  </div>
+</div>
+
+<div class="view" id="view-logs">
+  <h2>日志</h2>
+  <div class="card">
+    <h3>通信日志（本节点 outbound/inbound 全量审计）</h3>
+    <div class="row">
+      <select id="log-peer"><option value="">全部对端</option></select>
+      <select id="log-dir">
+        <option value="">全部方向</option><option value="inbound">inbound</option>
+        <option value="outbound">outbound</option><option value="local">local</option>
+      </select>
+      <select id="log-type"><option value="">全部类型</option></select>
+      <button class="btn" onclick="loadCommLog()">过滤</button>
+    </div>
+    <div style="max-height:44vh; overflow-y:auto">
+      <table id="log-table"><thead><tr>
+        <th>时间</th><th>方向</th><th>对端</th><th>类型</th><th>结果</th><th>摘要</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>运行日志 node.log</h3>
+    <div class="row"><button class="btn" onclick="loadNodeLog()">刷新</button></div>
+    <pre class="logbox" id="node-log-box">（点击刷新加载）</pre>
+  </div>
+</div>
+
+<div class="view" id="view-settings">
+  <h2>设置</h2>
+  <div class="card">
+    <h3>文本参数（点保存才生效）</h3>
+    <div class="row">
+      <label>节点名称</label>
+      <input type="text" id="set-name" style="min-width:240px">
+      <button class="btn primary" onclick="saveName()">保存</button>
+    </div>
+    <div class="row">
+      <label>team_id</label>
+      <input type="text" id="set-team" placeholder="空 = 无 team（全连通）" style="min-width:240px">
+      <button class="btn primary" onclick="saveTeam()">保存</button>
+      <span class="hint">切换 team 会断开旧 team 连接（需二次确认）</span>
+    </div>
+  </div>
+  <div class="card">
+    <h3>三个开关（集中管理）</h3>
+    <div id="set-switches"></div>
+  </div>
+  <div class="card">
+    <h3>其他</h3>
+    <div class="row">
+      <label>同步引擎</label>
+      <div class="switch" id="sw-sync" onclick="toggleSync()"></div>
+      <span class="hint">data/sync/ 文件夹（Syncthing），需重启生效</span>
+    </div>
+    <div class="row">
+      <label>收件箱清理</label>
+      <button class="btn" onclick="cleanupInbox('consumed')">清已读</button>
+      <button class="btn danger" onclick="cleanupInbox('expired')">清全部未读</button>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<div id="modal-mask"><div id="modal">
+  <h3 id="modal-title">任务</h3>
+  <div id="modal-body"></div>
+  <div class="row" style="margin-top:16px; justify-content:flex-end">
+    <button class="btn" onclick="closeModal()">关闭</button>
+    <button class="btn primary" id="modal-ok">确定</button>
+  </div>
+</div></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+let state = { overview: null, nodes: [], currentChat: null, fbNode: "", fbPath: "" };
+
+function toast(msg, isErr) {
+  const d = document.createElement("div");
+  d.className = "toast-item" + (isErr ? " error" : "");
+  d.textContent = msg;
+  $("#toast").appendChild(d);
+  setTimeout(() => d.remove(), 4200);
+}
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({
+    headers: { "Content-Type": "application/json", "X-Caller-Id": "panel" }
+  }, opts || {}));
+  return r.json();
+}
+function fmtSize(n) {
+  if (n == null) return "-";
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n/1024).toFixed(1) + " KB";
+  if (n < 1073741824) return (n/1048576).toFixed(1) + " MB";
+  return (n/1073741824).toFixed(2) + " GB";
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+/* ---------- 导航 ---------- */
+function switchView(v) {
+  $$(".view").forEach(e => e.classList.remove("active"));
+  $("#view-" + v).classList.add("active");
+  $$("#nav a").forEach(a => a.classList.toggle("active", a.dataset.view === v));
+  if (v === "chat") loadConversations();
+  if (v === "logs") { loadCommLog(); loadNodeLog(); }
+}
+$$("#nav a").forEach(a => a.onclick = () => switchView(a.dataset.view));
+
+/* ---------- 概览 + 3s 局部轮询 ---------- */
+async function refreshOverview() {
+  try {
+    const ov = await api("/api/overview");
+    state.overview = ov;
+    const light = $("#status-light");
+    light.className = ov.busy ? "busy" : "running";
+    $("#tb-name").textContent = ov.name;
+    $("#tb-nodeid").textContent = ov.nodeId;
+    $("#tb-status").textContent = `运行 ${Math.floor(ov.uptimeSec/60)} 分钟 · ` +
+      (ov.busy ? "有任务处理中" : "空闲");
+    $("#tb-sync").textContent = ov.sync.enabled ? "同步: 开" : "同步: 关";
+    $("#tb-notif").textContent = "通知 " + (ov.notifications || []).length;
+    renderOverview(ov);
+    renderSwitches(ov.switches, "#ov-switches", "#set-switches");
+  } catch (e) { /* 轮询失败静默，下轮重试 */ }
+}
+function renderOverview(ov) {
+  $("#ov-info").innerHTML = `
+    <div class="kv"><span class="k">node_id</span><span class="v mono">${esc(ov.nodeId)}</span></div>
+    <div class="kv"><span class="k">名称</span><span class="v">${esc(ov.name)}</span></div>
+    <div class="kv"><span class="k">team</span><span class="v">${esc(ov.teamId || "（无）")}</span></div>
+    <div class="kv"><span class="k">本机 IP</span><span class="v mono">${esc((ov.ips||[]).join(", "))}</span></div>
+    <div class="kv"><span class="k">发现端口</span><span class="v mono">${esc((ov.discoveryPorts||[]).join(", "))}</span></div>
+    <div class="kv"><span class="k">对等 TCP</span><span class="v mono">${esc(ov.peerTcpPort)}</span></div>
+    <div class="kv"><span class="k">面板</span><span class="v mono">${esc(ov.panelUrl)}</span></div>`;
+  const ex = (ov.executors || []).map(e => `
+    <div class="kv"><span class="k mono">${esc(e.agentId)}</span>
+    <span class="v">${esc(e.name || "")}
+      <span class="badge ${e.available ? "on" : "off"}">${e.available ? "可用" : "不可用"}</span>
+      <span class="badge gray">${esc(e.state || "")}</span>
+    </span></div>`).join("") || '<p class="hint">无本机执行器</p>';
+  $("#ov-executors").innerHTML = ex;
+  const nt = (ov.notifications || []).slice(-12).reverse().map(n => `
+    <div class="notif-item"><span class="t">${esc(n.ts)} [${esc(n.kind)}]</span><br>${esc(n.text)}</div>`).join("")
+    || '<p class="hint">暂无通知</p>';
+  $("#ov-notifications").innerHTML = nt;
+}
+function renderSwitches(sw, ovSel, setSel) {
+  const items = [
+    ["allow_shell", "远程执行命令（shell_exec）", "远程将无法执行命令"],
+    ["allow_file", "远程文件读写 / 插件分发", "远程将无法读写文件/分发插件"],
+    ["allow_ai_task", "远程任务触发执行器", "远程将无法调用本机执行器"]];
+  const html = items.map(([k, label, impact]) => `
+    <div class="switch-row">
+      <div class="switch ${sw[k] ? "on" : ""}" onclick="toggleSwitch('${k}', ${!sw[k]})"></div>
+      <div><b>${label}</b><div class="hint">${esc(k)} · ${sw[k] ? "已开启" : "已关闭（" + impact + "）"}</div></div>
+    </div>`).join("");
+  if (ovSel) $(ovSel).innerHTML = html;
+  if (setSel && $(setSel)) $(setSel).innerHTML = html;
+}
+async function toggleSwitch(k, v) {
+  const r = await api("/api/settings/switch", {
+    method: "POST", body: JSON.stringify({ switch: k, enabled: v })});
+  if (r.ok) { toast(`${k} 已${v ? "开启" : "关闭"}`); refreshOverview(); }
+  else toast("切换失败", true);
+}
+
+/* ---------- 节点 ---------- */
+async function refreshNodes() {
+  try {
+    const r = await api("/api/nodes");
+    state.nodes = r.nodes || [];
+    const tb = $("#nodes-table tbody");
+    tb.innerHTML = state.nodes.map(n => `
+      <tr>
+        <td><b>${esc(n.name)}</b></td>
+        <td class="mono">${esc(n.nodeId)}</td>
+        <td>${esc(n.teamId || "—")}</td>
+        <td><span class="badge ${n.online ? "on" : "off"}">${n.online ? "在线" : "离线"}</span></td>
+        <td>${(n.capabilities || []).map(c => `<span class="badge blue">${esc(c.name || c.agentId)}</span>`).join(" ") || '<span class="hint">—</span>'}</td>
+        <td>${["allow_shell","allow_file","allow_ai_task"].map(k =>
+          `<span class="badge ${n.switches[k] ? "on" : "off"}" title="${k}">${k.replace("allow_","").slice(0,4)}</span>`).join(" ")}</td>
+        <td class="mono">${esc(n.host || "")}:${esc(n.peerTcpPort || "")}</td>
+        <td class="mono">${esc((n.lastSeen || "").replace("T", " ").slice(0, 19))}</td>
+        <td><button class="btn small danger" onclick="forgetNode('${esc(n.nodeId)}')">忘记</button></td>
+      </tr>`).join("") || '<tr><td colspan="9" class="hint">暂未发现其他节点（等待 beacon，约 2~6 秒）</td></tr>';
+    const sel = $("#fb-node");
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">本机</option>` + state.nodes
+      .filter(n => n.online).map(n => `<option value="${esc(n.nodeId)}">${esc(n.name)} (${esc(n.nodeId)})</option>`).join("");
+    if (cur) sel.value = cur;
+    const ps = $("#log-peer");
+    ps.innerHTML = '<option value="">全部对端</option>' + state.nodes
+      .map(n => `<option value="${esc(n.nodeId)}">${esc(n.name)}</option>`).join("");
+  } catch (e) {}
+}
+async function forgetNode(id) {
+  if (!confirm("忘记该节点？（从已知列表移除，不影响对方）")) return;
+  await api("/api/nodes/forget", { method: "POST", body: JSON.stringify({ node_id: id })});
+  refreshNodes();
+}
+async function addManualPeer() {
+  const host = $("#mp-host").value.trim(), port = parseInt($("#mp-port").value) || 0;
+  if (!host || !port) return toast("请填写 host 与端口", true);
+  const r = await api("/api/peers/add_manual", {
+    method: "POST", body: JSON.stringify({ host, peer_tcp_port: port })});
+  toast(r.ok ? "已发起连接" : "添加失败: " + (r.detail || ""), !r.ok);
+}
+
+/* ---------- 聊天 ---------- */
+async function loadConversations() {
+  const r = await api("/api/chat/conversations");
+  const el = $("#conv-list");
+  el.innerHTML = (r.conversations || []).map(c => {
+    const n = state.nodes.find(x => x.nodeId === c.peer_node_id);
+    const name = (n && n.name) || c.peer_node_id;
+    return `<div class="conv ${state.currentChat === c.peer_node_id ? "active" : ""}"
+      onclick="openChat('${esc(c.peer_node_id)}')">
+      <b>${esc(name)}</b><br><span class="hint">${c.msg_count} 条 · ${esc((c.last_ts||"").slice(5,16))}</span></div>`;
+  }).join("") || '<p class="hint">暂无会话</p>';
+}
+async function openChat(peerId) {
+  state.currentChat = peerId;
+  loadConversations();
+  const r = await api("/api/chat/history?peer=" + encodeURIComponent(peerId) + "&limit=500");
+  const box = $("#chat-msgs");
+  box.innerHTML = (r.messages || []).map(m => {
+    const mine = m.direction === "out";
+    return `<div class="bubble ${mine ? "out" : "in"}">${esc(m.text)}
+      <div class="meta">${esc((m.ts||"").slice(11,19))}</div></div>`;
+  }).join("") || '<p class="hint" style="margin:auto">暂无消息</p>';
+  box.scrollTop = box.scrollHeight;
+}
+async function sendChat() {
+  const input = $("#chat-input");
+  const text = input.value.trim();
+  if (!text || !state.currentChat) return;
+  const r = await api("/api/chat/send", {
+    method: "POST",
+    body: JSON.stringify({ target_node_id: state.currentChat, text })});
+  if (r.ok) { input.value = ""; openChat(state.currentChat); }
+  else toast(r.detail || "发送失败", true);
+}
+$("#chat-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") sendChat();
+});
+
+/* ---------- 文件浏览器 ---------- */
+async function fbList() {
+  const node = $("#fb-node").value;
+  state.fbNode = node;
+  const path = state.fbPath || "";
+  const r = await api(`/api/files/list?node_id=${encodeURIComponent(node)}&path=${encodeURIComponent(path)}`);
+  if (!r.ok) return toast(r.detail || "列目录失败", true);
+  state.fbPath = r.path || path;
+  renderCrumbs(state.fbPath);
+  const tb = $("#fb-table tbody");
+  tb.innerHTML = (r.entries || []).map(e => `
+    <tr>
+      <td>${e.isDir
+        ? `<a style="color:var(--accent);cursor:pointer" onclick="fbEnter('${esc(e.path).replace(/'/g,"&#39;")}')">📁 ${esc(e.name)}</a>`
+        : `📄 ${esc(e.name)}`}</td>
+      <td>${e.isDir ? "目录" : "文件"}</td>
+      <td>${e.isDir ? "—" : fmtSize(e.size)}</td>
+      <td>${e.isDir
+        ? `<button class="btn small" onclick="fbDownloadDir('${esc(e.path).replace(/'/g,"&#39;")}')">整树下载</button>`
+        : `<button class="btn small" onclick="fbDownload('${esc(e.path).replace(/'/g,"&#39;")}')">下载</button>`}</td>
+    </tr>`).join("") || '<tr><td colspan="4" class="hint">空目录</td></tr>';
+}
+function renderCrumbs(path) {
+  const parts = String(path).split(/[\\/]/).filter(Boolean);
+  let acc = path.startsWith("/") ? "" : "";
+  let html = "";
+  if (path[1] === ":") { // Windows 盘符
+    html = `<a onclick="fbEnter('${path.slice(0,3)}')">${path.slice(0,2)}</a>`;
+    let cur = path.slice(0,3);
+    for (const p of path.slice(3).split("\\").filter(Boolean)) {
+      cur = cur.replace(/\\$/, "") + "\\" + p;
+      html += ` <span>›</span> <a onclick="fbEnter('${esc(cur)}')">${esc(p)}</a>`;
+    }
+  } else {
+    html = `<a onclick="fbEnter('/')">/</a>`;
+    let cur = "";
+    for (const p of parts) { cur += "/" + p; html += ` <span>›</span> <a onclick="fbEnter('${esc(cur)}')">${esc(p)}</a>`; }
+  }
+  $("#fb-crumbs").innerHTML = html;
+}
+function fbGoRoot() { state.fbPath = ""; fbList(); }
+function fbEnter(path) { state.fbPath = path; fbList(); }
+function fbUp() {
+  const p = state.fbPath || "";
+  let parent;
+  if (/^[A-Za-z]:\\?$/.test(p)) { state.fbPath = ""; return fbList(); }
+  if (p.includes("\\")) { parent = p.replace(/\\[^\\]+\\?$/, ""); if (!parent.endsWith("\\")) parent += "\\"; }
+  else parent = p.replace(/\/[^/]+\/?$/, "") || "/";
+  state.fbPath = parent;
+  fbList();
+}
+function fbDownload(path) {
+  const node = $("#fb-node").value;
+  window.open(`/api/files/download?node_id=${encodeURIComponent(node)}&path=${encodeURIComponent(path)}`);
+}
+function fbDownloadDir(path) {
+  const node = $("#fb-node").value;
+  api(`/api/files/list?node_id=${encodeURIComponent(node)}&path=${encodeURIComponent(path)}&recursive=true`)
+    .then(r => {
+      const files = (r.entries || []).filter(e => !e.isDir);
+      if (!files.length) return toast("空目录");
+      let i = 0;
+      const next = () => { if (i < files.length) fbDownload(files[i++].path); };
+      toast(`开始逐文件下载 ${files.length} 个（浏览器可能拦多弹窗，请允许）`);
+      let timer = setInterval(() => { next(); if (i >= files.length) clearInterval(timer); }, 900);
+    });
+}
+async function fbUpload(input) {
+  const node = $("#fb-node").value;
+  const dir = state.fbPath || "";
+  for (const f of input.files) {
+    const r = await fetch(`/api/files/upload?node_id=${encodeURIComponent(node)}&target_dir=${encodeURIComponent(dir)}`,
+      { method: "POST", headers: { "X-File-Name": encodeURIComponent(f.name) }, body: f });
+    const j = await r.json();
+    toast(j.ok ? `已上传 ${f.name}` : `上传失败: ${j.detail}`, !j.ok);
+  }
+  input.value = "";
+  fbList();
+}
+function fbLocal(sub) { state.fbPath = ""; $("#fb-node").value = ""; fbList(); }
+async function pushFile() {
+  const local = $("#fp-local").value.trim(), target = $("#fp-target").value.trim();
+  const node = $("#fb-node").value;
+  if (!local) return toast("请填写本机路径", true);
+  const r = await api("/api/files/push", {
+    method: "POST",
+    body: JSON.stringify({ node_id: node, local_path: local, target_path: target || null })});
+  toast(r.ok ? "推送成功: " + (r.detail || "") : "推送失败: " + (r.detail || r.error), !r.ok);
+}
+
+/* ---------- 执行器 ---------- */
+async function refreshExecutors() {
+  try {
+    const r = await api("/api/executors");
+    const tb = $("#exec-table tbody");
+    tb.innerHTML = (r.executors || []).map(e => {
+      const st = e.status || {};
+      const stateBadge = st.state === "busy" ? "yellow" : (st.state === "suspended" ? "purple" :
+        (e.online ? "on" : "off"));
+      return `<tr>
+        <td>${e.local ? '<b>本机</b>' : esc(e.nodeId)}</td>
+        <td><b>${esc(e.name)}</b><br><span class="hint">${esc(e.sessionPolicy || "")}</span></td>
+        <td class="mono" style="font-size:11px">${esc(e.executorId)}</td>
+        <td><span class="badge gray">${esc(e.executorType || "")}</span></td>
+        <td><span class="badge ${stateBadge}">${esc(st.state || (e.online ? "online" : "offline"))}</span>
+          ${st.suspendReason ? `<div class="hint">${esc(st.suspendReason)}${st.until ? " 至 " + esc(st.until) : ""}</div>` : ""}</td>
+        <td>${e.local ? `${st.inflight ?? 0}/${st.concurrency ?? e.concurrency} · 队列 ${st.queueLen ?? 0}` : "—"}</td>
+        <td style="max-width:260px">${(e.premises || []).map(p => `<div class="hint">• ${esc(p)}</div>`).join("") || "—"}</td>
+        <td>
+          <button class="btn small primary" onclick="openTaskModal('${esc(e.executorId)}')">调用</button>
+          ${e.local ? `
+          <button class="btn small" onclick="queryExec('${esc(e.executorId)}')">刷新</button>
+          <button class="btn small" onclick="toggleSuspend('${esc(e.executorId)}', ${st.state === "suspended" ? "false" : "true"})">${st.state === "suspended" ? "恢复" : "挂起"}</button>
+          <button class="btn small" onclick="restartPlugin('${esc(e.executorId)}')">重启</button>` : `
+          <button class="btn small" onclick="queryExec('${esc(e.executorId)}')">深查</button>`}
+        </td>
+      </tr>`;
+    }).join("") || '<tr><td colspan="8" class="hint">无执行器</td></tr>';
+  } catch (e) {}
+}
+async function queryExec(id) {
+  const r = await api("/api/executors/status?executor_id=" + encodeURIComponent(id));
+  if (r.ok) { toast("状态: " + JSON.stringify(r.status).slice(0, 120)); refreshExecutors(); }
+  else toast(r.detail || r.error || "查询失败", true);
+}
+async function toggleSuspend(id, suspend) {
+  let body = { executor_id: id, suspend };
+  if (suspend) {
+    const reason = prompt("挂起原因（可空，如: 超额）", "") || "手动";
+    body.reason = reason;
+    const until = prompt("到期时间点（可空，ISO 格式如 2026-08-20T18:00:00，空=长期）", "");
+    if (until) body.until = until;
+  }
+  const r = await api("/api/executors/suspend", { method: "POST", body: JSON.stringify(body) });
+  toast(r.ok ? (suspend ? "已挂起" : "已恢复") : "操作失败", !r.ok);
+  refreshExecutors();
+}
+async function restartPlugin(id) {
+  const r = await api("/api/executors/restart", { method: "POST", body: JSON.stringify({ executor_id: id })});
+  toast(r.ok ? "插件已重启" : "重启失败", !r.ok);
+  refreshExecutors();
+}
+
+/* ---------- 任务弹窗 ---------- */
+function openModal(title, bodyHtml, onOk) {
+  $("#modal-title").textContent = title;
+  $("#modal-body").innerHTML = bodyHtml;
+  $("#modal-mask").classList.add("show");
+  $("#modal-ok").onclick = onOk;
+}
+function closeModal() { $("#modal-mask").classList.remove("show"); }
+$("#modal-mask").addEventListener("click", e => { if (e.target.id === "modal-mask") closeModal(); });
+function openTaskModal(executorId) {
+  openModal("调用执行器: " + executorId, `
+    <div class="row"><label>提示词</label></div>
+    <textarea id="task-prompt" class="full" placeholder="任务指令…"></textarea>
+    <div class="row" style="margin-top:10px">
+      <label>模式</label>
+      <select id="task-mode">
+        <option value="sync">sync（阻塞等结果）</option>
+        <option value="async" selected>async（回执进邮箱）</option>
+        <option value="trigger">trigger（只触发）</option>
+      </select>
+      <label>超时秒</label>
+      <input type="number" id="task-timeout" value="600" style="min-width:90px">
+    </div>
+    <div class="row"><label>附件</label><input type="text" id="task-atts" class="full" placeholder="本机路径，逗号分隔（可空）"></div>`,
+    async () => {
+      const prompt = $("#task-prompt").value.trim();
+      if (!prompt) return toast("提示词为空", true);
+      const atts = $("#task-atts").value.split(",").map(s => s.trim()).filter(Boolean);
+      closeModal();
+      toast("任务已提交，等待结果…");
+      const r = await api("/api/task/submit", { method: "POST", body: JSON.stringify({
+        executor_id: executorId, prompt, mode: $("#task-mode").value,
+        timeout: parseInt($("#task-timeout").value) || 600, attachments: atts })});
+      if (!r.ok) return toast("任务失败: " + (r.detail || r.error), true);
+      if (r.mode === "trigger") return toast("触发成功 ✓");
+      if (r.mode === "async") return toast("已受理，回执将进异步邮箱（通知栏提醒）");
+      openModal("任务结果 [" + r.taskId.slice(0, 8) + "]",
+        `<pre class="logbox">${esc(r.content || r.task && JSON.stringify(r.task, null, 2) || "（无内容）")}</pre>`,
+        closeModal);
+    });
+}
+
+/* ---------- 日志 ---------- */
+async function loadCommLog() {
+  const q = new URLSearchParams();
+  if ($("#log-peer").value) q.set("peer", $("#log-peer").value);
+  if ($("#log-dir").value) q.set("direction", $("#log-dir").value);
+  if ($("#log-type").value) q.set("type", $("#log-type").value);
+  const r = await api("/api/logs/comm?" + q.toString());
+  $("#log-table tbody").innerHTML = (r.entries || []).map(e => `
+    <tr>
+      <td class="mono">${esc((e.ts||"").slice(5,19))}</td>
+      <td><span class="badge ${e.direction === "inbound" ? "blue" : "gray"}">${esc(e.direction)}</span></td>
+      <td class="mono" style="font-size:11px">${esc(e.peer_node_id || "")}</td>
+      <td class="mono">${esc(e.msg_type)}</td>
+      <td>${e.result ? `<span class="badge ${e.result === "ok" ? "on" : "off"}">${esc(e.result)}</span>` : ""}</td>
+      <td class="hint">${esc((e.detail||"").slice(0,90))}</td>
+    </tr>`).join("") || '<tr><td colspan="6" class="hint">暂无日志</td></tr>';
+}
+async function loadNodeLog() {
+  const r = await api("/api/logs/node?lines=200");
+  $("#node-log-box").textContent = r.log || "（空）";
+}
+
+/* ---------- 设置 ---------- */
+async function loadSettings() {
+  const r = await api("/api/settings");
+  const c = r.config || {};
+  $("#set-name").value = c.name || "";
+  $("#set-team").value = c.teamId || "";
+  $("#sw-sync").className = "switch" + (c.syncEnabled ? " on" : "");
+}
+async function saveName() {
+  const r = await api("/api/settings/name", {
+    method: "POST", body: JSON.stringify({ name: $("#set-name").value })});
+  toast(r.ok ? "名称已保存并随 beacon 广播" : "保存失败", !r.ok);
+  refreshOverview();
+}
+async function saveTeam() {
+  const t = $("#set-team").value.trim();
+  if (!confirm(`切换 team 到「${t || "无 team"}」？将断开旧 team 连接，需重新发现。`)) return;
+  const r = await api("/api/settings/team", { method: "POST", body: JSON.stringify({ team_id: t })});
+  toast(r.ok ? "team 已切换" : "切换失败", !r.ok);
+  refreshOverview(); refreshNodes();
+}
+async function toggleSync() {
+  const on = !$("#sw-sync").classList.contains("on");
+  $("#sw-sync").className = "switch" + (on ? " on" : "");
+  await api("/api/settings/sync", { method: "POST", body: JSON.stringify({ enabled: on })});
+  toast("已保存（重启节点生效）");
+}
+async function cleanupInbox(mode) {
+  const r = await api("/api/inbox/cleanup", { method: "POST", body: JSON.stringify({ mode })});
+  toast(`已清理 ${r.deleted} 条`);
+}
+
+/* ---------- 轮询主循环（3s 局部数据轮询，2.1.6/4.4） ---------- */
+let pollCount = 0;
+async function pollLoop() {
+  refreshOverview();
+  refreshNodes();
+  refreshExecutors();
+  pollCount++;
+  if (pollCount % 4 === 0 && state.currentChat &&
+      $("#view-chat").classList.contains("active")) openChat(state.currentChat);
+}
+refreshOverview(); refreshNodes(); refreshExecutors(); loadSettings();
+setInterval(pollLoop, 3000);
+</script>
+</body>
+</html>

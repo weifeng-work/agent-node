@@ -1,0 +1,265 @@
+"""Web 面板（2.9 / 第四章）—— FastAPI REST + 静态 SPA，绑定 127.0.0.1（2.1.5）。
+
+- 默认端口 5177，被占则顺序 +1 兜底（2.1.5）；实际 URL 写 data/panel.url
+- REST = 节点完整本地 API（MCP 薄桥与 CLI 共用，2.5.1/2.10.4）
+- caller_id 经 X-Caller-Id 头传递（2.6.3）
+"""
+from __future__ import annotations
+
+import socket
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+
+import node.config as cfg_mod
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def create_app(core) -> FastAPI:
+    app = FastAPI(title="agent-node panel", docs_url=None, redoc_url=None)
+
+    def caller_id(request: Request) -> str:
+        return request.headers.get("X-Caller-Id") or "panel"
+
+    # ---------- 静态 SPA ----------
+    @app.get("/")
+    def index():
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/api/health")
+    def health():
+        return {"ok": True, "nodeId": core.node_id}
+
+    # ---------- 概览（2.9.3） ----------
+    @app.get("/api/overview")
+    def overview():
+        return core.overview()
+
+    # ---------- 节点（2.1.9 / 2.1.10） ----------
+    @app.get("/api/nodes")
+    def nodes():
+        return {"ok": True, "nodes": core.list_nodes()}
+
+    @app.post("/api/nodes/forget")
+    async def forget_node(body: dict):
+        return core.forget_node(body.get("node_id") or "")
+
+    @app.post("/api/peers/add_manual")
+    async def add_manual(body: dict):
+        return core.add_manual_peer(body.get("host") or "",
+                                    int(body.get("peer_tcp_port") or 0))
+
+    @app.post("/api/peers/remove_manual")
+    async def remove_manual(body: dict):
+        return core.remove_manual_peer(body.get("host") or "")
+
+    # ---------- 聊天（2.8） ----------
+    @app.get("/api/chat/conversations")
+    def conversations():
+        return {"ok": True, "conversations": core.conversations()}
+
+    @app.get("/api/chat/history")
+    def chat_history(peer: str, limit: int = 200):
+        return {"ok": True, "messages": core.chat_history(peer, limit)}
+
+    @app.post("/api/chat/send")
+    async def chat_send(body: dict):
+        return core.send_chat(body.get("target_node_id") or "",
+                              body.get("text") or "", body.get("session_id"))
+
+    # ---------- 文件（2.4 / 2.4.6） ----------
+    @app.get("/api/files/list")
+    def files_list(node_id: str = "", path: str = "", recursive: bool = False):
+        return core.list_dir(node_id or None, path, recursive)
+
+    @app.post("/api/files/push")
+    async def files_push(body: dict):
+        return core.file_push(body.get("node_id") or None,
+                              body.get("local_path") or "",
+                              body.get("target_path"))
+
+    @app.post("/api/files/pull")
+    async def files_pull(body: dict):
+        return core.file_pull(body.get("node_id") or None,
+                              body.get("path") or "")
+
+    @app.get("/api/files/download")
+    def files_download(node_id: str, path: str):
+        """面板下载: pull 到本机收件目录后返回内容（单文件流式）。"""
+        import urllib.parse
+        result = core.file_pull(node_id, path)
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=200)
+        return FileResponse(result["path"], filename=Path(path).name)
+
+    @app.post("/api/files/upload")
+    async def files_upload(request: Request, node_id: str, target_dir: str = ""):
+        """面板上传（2.4.6）: 浏览器原始字节 → 落临时文件 → push 到目标目录。"""
+        name = request.headers.get("X-File-Name") or "upload.bin"
+        import urllib.parse
+        name = urllib.parse.unquote(name)
+        data = await request.body()
+        if not data:
+            return {"ok": False, "error": "agent_error", "detail": "空文件"}
+        tmp = core.config.inbox_dir() / f"_upload_{name}"
+        core.config.inbox_dir().mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(data)
+        target = f"{target_dir}/{name}" if target_dir else None
+        return core.file_push(node_id or None, str(tmp), target)
+
+    # ---------- 执行器（2.9.10 / 4.3） ----------
+    @app.get("/api/executors")
+    def executors():
+        return {"ok": True, "executors": core.list_executors()}
+
+    @app.get("/api/executors/status")
+    def executor_status(executor_id: str):
+        return core.get_executor_status(executor_id)
+
+    @app.post("/api/executors/suspend")
+    async def suspend(body: dict):
+        return core.set_executor_suspend(body.get("executor_id") or "",
+                                         bool(body.get("suspend")),
+                                         body.get("reason"), body.get("until"))
+
+    @app.post("/api/executors/restart")
+    async def restart(body: dict):
+        return core.restart_plugin(body.get("executor_id") or "")
+
+    @app.post("/api/executors/rename")
+    async def rename_exec(body: dict):
+        return core.rename_executor(body.get("executor_id") or "",
+                                    body.get("new_name") or "")
+
+    @app.get("/api/executors/sessions")
+    def sessions(executor_id: str = ""):
+        return core.list_agent_sessions(executor_id or None)
+
+    # ---------- 任务（2.7） ----------
+    @app.post("/api/task/submit")
+    async def task_submit(request: Request):
+        body = await request.json()
+        return core.submit_task(
+            body.get("executor_id") or "", body.get("prompt") or "",
+            mode=body.get("mode") or "async",
+            attachments=body.get("attachments"),
+            timeout=float(body.get("timeout") or 600),
+            task_id=body.get("task_id"),
+            caller_id=caller_id(request))
+
+    @app.get("/api/task/result")
+    def task_result(task_id: str):
+        return core.get_task_result(task_id)
+
+    # ---------- inbox ----------
+    @app.get("/api/inbox")
+    def inbox(request: Request):
+        return {"ok": True, "items": core.check_inbox(caller_id(request))}
+
+    @app.post("/api/inbox/cleanup")
+    async def inbox_cleanup(body: dict):
+        return core.cleanup_inbox(body.get("mode") or "consumed", body.get("before"))
+
+    # ---------- 日志（2.3 / 2.9.7） ----------
+    @app.get("/api/logs/comm")
+    def logs_comm(peer: str = "", direction: str = "", type: str = "",
+                  correlation_id: str = "", limit: int = 200):
+        return {"ok": True, "entries": core.comm_log(
+            peer_node_id=peer or None, direction=direction or None,
+            msg_type=type or None, correlation_id=correlation_id or None,
+            limit=limit)}
+
+    @app.get("/api/logs/node")
+    def logs_node(lines: int = 200):
+        return {"ok": True, "log": core.node_log(lines)}
+
+    # ---------- 设置（2.9.9 / 2.14.3） ----------
+    @app.get("/api/settings")
+    def settings():
+        c = core.config
+        return {"ok": True, "config": {
+            "nodeId": c.node_id, "name": c.name, "teamId": c.team_id,
+            "switches": dict(c.switches), "runAsAdmin": c.run_as_admin,
+            "peerTcpPort": c.peer_tcp_port, "manualPeers": list(c.manual_peers),
+            "syncEnabled": c.sync_enabled,
+            "discoveryPorts": c.discovery_ports(),
+        }}
+
+    @app.post("/api/settings/name")
+    async def set_name(body: dict):
+        return core.rename_node(body.get("name") or "")
+
+    @app.post("/api/settings/team")
+    async def set_team(body: dict):
+        return core.set_team(body.get("team_id") or "")
+
+    @app.post("/api/settings/switch")
+    async def set_switch(body: dict):
+        return core.set_switch(body.get("switch") or "", bool(body.get("enabled")))
+
+    @app.post("/api/settings/sync")
+    async def set_sync(body: dict):
+        core.config.sync_enabled = bool(body.get("enabled"))
+        core.config.save()
+        return {"ok": True, "detail": "需重启节点生效"}
+
+    # ---------- shell（2.5.9 ⑧） ----------
+    @app.post("/api/shell")
+    async def shell(request: Request):
+        body = await request.json()
+        return core.shell_exec(body.get("target_node_id") or None,
+                               body.get("command") or "",
+                               float(body.get("timeout") or 60))
+
+    # ---------- 插件（2.2.10） ----------
+    @app.get("/api/plugins")
+    def plugins():
+        return {"ok": True, "plugins": core.list_plugins()}
+
+    @app.post("/api/plugins/distribute")
+    async def distribute(body: dict):
+        return core.distribute_plugin(body.get("target_node_id") or "",
+                                      body.get("plugin_path") or "")
+
+    # ---------- 同步 ----------
+    @app.post("/api/sync/now")
+    def sync_now():
+        return core.sync_now()
+
+    # ---------- 诊断（2.17.7） ----------
+    @app.get("/api/diag")
+    def diag():
+        return core.diag()
+
+    return app
+
+
+def pick_panel_port(preferred: int) -> int:
+    """2.1.5: 默认固定端口，被占则顺序 +1 尝试。"""
+    port = preferred
+    for _ in range(20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                port += 1
+    raise RuntimeError("面板端口 5177+20 均被占用")
+
+
+def serve(core, preferred_port: int | None = None) -> int:
+    """启动面板（阻塞运行于调用线程）；返回实际端口并写 data/panel.url。"""
+    import uvicorn
+    port = pick_panel_port(preferred_port or cfg_mod.DEFAULT_PANEL_PORT)
+    if port != (preferred_port or cfg_mod.DEFAULT_PANEL_PORT):
+        # 2.1.5: 非默认端口 → 非模态提示（由 core.notify 落面板通知）
+        core._notify("warning", f"默认面板端口被占用，已改用 {port}")
+        core.log("warning", f"默认面板端口被占用，已改用 {port}")
+    core.panel_port = port
+    (core.data_dir / "panel.url").write_text(
+        f"http://127.0.0.1:{port}/", encoding="utf-8")
+    app = create_app(core)
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    return port
