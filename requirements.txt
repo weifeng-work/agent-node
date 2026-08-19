@@ -1,0 +1,9 @@
+paho-mqtt>=2.0
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+requests>=2.31
+mcp>=1.0,<2
+# 托盘 UI（仅 GUI 模式需要；--headless / --mcp 免装）
+pystray>=0.19
+pillow>=10.0
