@@ -36,15 +36,51 @@ def _local_ips() -> list[str]:
     return ips
 
 
+def _all_local_ips() -> list[str]:
+    ips: list[str] = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.connect(("8.8.8.8", 80))
+        ips.append(s.getsockname()[0])
+        s.close()
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip not in ips and not ip.startswith("127."):
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips
+
+
+def _subnet_broadcasts() -> list[str]:
+    """按 /24 推导各接口的子网定向广播地址（实测部分 Windows 不收 255.255.255.255）。"""
+    outs = []
+    for ip in _all_local_ips():
+        try:
+            bcast = ip.rsplit(".", 1)[0] + ".255"
+            if bcast not in outs:
+                outs.append(bcast)
+        except Exception:
+            pass
+    return outs
+
+
 class BeaconService:
     def __init__(self, ports: list[int], my_node_id: str, payload_provider,
-                 on_beacon, interval: float = BEACON_INTERVAL):
-        """payload_provider() -> dict（不含 seq）；on_beacon(payload_dict, addr) 在监听线程调用。"""
+                 on_beacon, interval: float = BEACON_INTERVAL,
+                 known_hosts_provider=None):
+        """payload_provider() -> dict（不含 seq）；on_beacon(payload_dict, addr) 在监听线程调用。
+        known_hosts_provider() -> set[str]: 已知对端 host IP（beacon 定向单播兜底）。"""
         self.ports = list(ports)
         self.my_node_id = my_node_id
         self.payload_provider = payload_provider
         self.on_beacon = on_beacon
         self.interval = interval
+        self.known_hosts_provider = known_hosts_provider or (lambda: set())
         self._seq = 0
         self._recent: dict[str, deque] = {}
         self._recent_lock = threading.Lock()
@@ -125,11 +161,20 @@ class BeaconService:
                 base["v"] = 1
                 base["seq"] = self._seq
                 data = json.dumps(base, ensure_ascii=False).encode("utf-8")
-                for p in self.ports:
-                    try:
-                        self._send_sock.sendto(data, (_BROADCAST_HOST, p))
-                    except OSError:
-                        continue
+                # 三路并发送达: 全网广播 + 子网定向广播（部分环境不收全网广播）+
+                # 已知对端单播（最可靠，已知节点状态更新不受广播环境影响）
+                targets = {_BROADCAST_HOST}
+                targets.update(_subnet_broadcasts())
+                try:
+                    targets.update(self.known_hosts_provider())
+                except Exception:
+                    pass
+                for host in targets:
+                    for p in self.ports:
+                        try:
+                            self._send_sock.sendto(data, (host, p))
+                        except OSError:
+                            continue
             except Exception:
                 pass
             self._stop.wait(self.interval)

@@ -172,10 +172,19 @@ class Store:
                 "INSERT INTO known_peers(node_id, name, team_id, capabilities, switches, "
                 "sync_device_id, host, peer_tcp_port, first_seen, last_seen) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(node_id) DO UPDATE SET name=excluded.name, team_id=excluded.team_id, "
-                "capabilities=excluded.capabilities, switches=excluded.switches, "
-                "sync_device_id=excluded.sync_device_id, host=excluded.host, "
-                "peer_tcp_port=excluded.peer_tcp_port, last_seen=excluded.last_seen",
+                "ON CONFLICT(node_id) DO UPDATE SET "
+                # 空值不覆盖既有值（beacon 与握手两路写入互补）
+                "name=COALESCE(NULLIF(excluded.name,''), known_peers.name), "
+                "team_id=excluded.team_id, "
+                "capabilities=CASE WHEN excluded.capabilities != '[]' "
+                "THEN excluded.capabilities ELSE known_peers.capabilities END, "
+                "switches=CASE WHEN excluded.switches != '{}' "
+                "THEN excluded.switches ELSE known_peers.switches END, "
+                "sync_device_id=COALESCE(NULLIF(excluded.sync_device_id,''), "
+                "known_peers.sync_device_id), "
+                "host=COALESCE(NULLIF(excluded.host,''), known_peers.host), "
+                "peer_tcp_port=COALESCE(excluded.peer_tcp_port, known_peers.peer_tcp_port), "
+                "last_seen=excluded.last_seen",
                 (node_id, name or "", team_id or "",
                  json.dumps(capabilities or [], ensure_ascii=False),
                  json.dumps(switches or {}, ensure_ascii=False),

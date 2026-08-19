@@ -261,5 +261,8 @@ def serve(core, preferred_port: int | None = None) -> int:
     (core.data_dir / "panel.url").write_text(
         f"http://127.0.0.1:{port}/", encoding="utf-8")
     app = create_app(core)
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    # log_config=None: 规避部分 Python 版本上 uvicorn 默认日志配置器
+    # （"Unable to configure formatter 'default'"）的兼容性问题
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning",
+                log_config=None)
     return port

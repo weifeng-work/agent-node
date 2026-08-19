@@ -255,9 +255,12 @@ class Connection:
         self.mesh._dispatch(env, self)
 
     def send_pong(self, ping_env: dict) -> None:
+        # pong 的 correlation_id = ping 的 correlation_id（缺省回退 msg_id），
+        # 保证发送方 pending_ponges 能匹配（A.7）
+        cid = ping_env.get("correlation_id") or ping_env.get("msg_id")
         self.send_env(P.make_envelope(
             P.T_PONG, self.mesh.my_node_id, ping_env.get("sender_node_id") or "*",
-            {}, correlation_id=ping_env.get("msg_id")))
+            {}, correlation_id=cid))
 
     def _keepalive(self) -> None:
         while self.alive:
@@ -271,9 +274,10 @@ class Connection:
                     self.close("keepalive missed")
                     break
             try:
+                # msg_id=pid: pong 按此回 correlate，与 pending 精确匹配
                 self.send_env(P.make_envelope(
                     P.T_PING, self.mesh.my_node_id, self.peer_node_id or "*",
-                    {}, correlation_id=pid))
+                    {}, correlation_id=pid, msg_id=pid))
             except Exception:
                 self.close("keepalive send failed")
                 break

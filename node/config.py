@@ -70,7 +70,8 @@ class NodeConfig:
         cfg = dict(DEFAULT_CONFIG)
         if self.path.exists():
             try:
-                loaded = json.loads(self.path.read_text(encoding="utf-8"))
+                # utf-8-sig 兼容 PowerShell Set-Content 写出的 BOM
+                loaded = json.loads(self.path.read_text(encoding="utf-8-sig"))
                 cfg.update({k: v for k, v in loaded.items() if k in DEFAULT_CONFIG})
             except Exception:
                 pass  # 损坏则回退默认重建（2.17.4 异常不吞噬：由调用方日志记录）

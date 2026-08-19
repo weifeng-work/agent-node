@@ -74,7 +74,8 @@ class NodeCore:
         self.beacon = BeaconService(
             self.config.discovery_ports(), self.node_id,
             payload_provider=lambda: build_beacon_payload(self),
-            on_beacon=self._on_beacon)
+            on_beacon=self._on_beacon,
+            known_hosts_provider=self._known_peer_hosts)
         self.registry = ExecutorRegistry(self)
         self.sync = None  # 可选（sync/syncthing.py，延后初始化）
         self.panel_port = panel_port
@@ -123,18 +124,26 @@ class NodeCore:
                          name="manual-peers").start()
         threading.Thread(target=self._async_retry_loop, daemon=True,
                          name="async-retry").start()
-        # 同步引擎（可选，缺失二进制则降级跳过）
-        try:
-            if self.config.sync_enabled:
-                from sync.syncthing import SyncManager
-                self.sync = SyncManager(self)
-                self.sync.start()
-        except Exception as e:
-            self.log("warning", f"同步引擎未启用: {e}")
-            self.sync = None
+        # 同步引擎（可选，缺失二进制则降级跳过；后台线程启动不阻塞节点就绪）
+        if self.config.sync_enabled:
+            threading.Thread(target=self._start_sync, daemon=True,
+                             name="sync-start").start()
         self.log("info", f"节点已启动: {self.node_id} name={self.config.name} "
                          f"team={self.config.team_id!r} "
                          f"peer_tcp={self.mesh.my_listen_port} panel={self.panel_port}")
+
+    def _start_sync(self) -> None:
+        try:
+            from sync.syncthing import SyncManager
+            sync = SyncManager(self)
+            sync.start()
+            if sync.device_id:
+                self.sync = sync
+            else:
+                sync.stop()
+                self.log("warning", "同步引擎启动失败（REST 未就绪），本次跳过")
+        except Exception as e:
+            self.log("warning", f"同步引擎未启用: {e}")
 
     def stop(self) -> None:
         self._stopping = True
@@ -227,6 +236,22 @@ class NodeCore:
             return list(self._notifications[-limit:])
 
     # ================= beacon / 在线检测 =================
+    def _known_peer_hosts(self) -> set[str]:
+        """已知对端 host IP 集合（beacon 定向单播目标）。"""
+        hosts: set[str] = set()
+        for addr in self.mesh._known_addrs.values():
+            if addr and addr[0]:
+                hosts.add(addr[0])
+        try:
+            for p in self.store.peers():
+                h = p.get("host")
+                if h:
+                    hosts.add(h)
+        except Exception:
+            pass
+        hosts.discard("")
+        return hosts
+
     def _on_beacon(self, payload: dict, addr) -> None:
         node_id = payload.get("node_id")
         if not node_id or node_id == self.node_id:
@@ -257,7 +282,9 @@ class NodeCore:
     def on_peer_connected(self, node_id: str, conn) -> None:
         with self._lock:
             self._online[node_id] = True
-        self.store.upsert_peer(node_id, host=conn.addr[0] if conn.addr else None,
+        self.store.upsert_peer(node_id, name=conn.peer_name,
+                               team_id=conn.peer_team,
+                               host=conn.addr[0] if conn.addr else None,
                                peer_tcp_port=conn.peer_peer_tcp)
         self.log("info", f"对端已连接: {node_id} ({conn.addr})")
         self._notify("info", f"节点已连接: {self._peer_display_name(node_id)}")
@@ -1100,13 +1127,15 @@ class NodeCore:
             self.log("warning", f"异步回执推送失败（入重试队列）: {record.task_id[:8]}")
 
     def _async_retry_loop(self) -> None:
+        """每 20s 重试推送失败的异步回执，直至 deadline（10 分钟）。"""
         while not self._stopping:
             time.sleep(20)
             with self._lock:
-                due = [(tid, exp) for tid, exp in self._async_retry if time.time() >= exp]
+                now = time.time()
+                due = [tid for tid, exp in self._async_retry if now < exp]
                 self._async_retry = [(t, e) for t, e in self._async_retry
-                                     if (t, e) not in due]
-            for task_id, _ in due:
+                                     if now < e and t not in due]
+            for task_id in due:
                 rec = self.registry.tasks.get(task_id)
                 if rec and rec.caller_node_id:
                     self.push_async_result(rec)

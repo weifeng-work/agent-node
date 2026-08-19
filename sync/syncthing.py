@@ -68,7 +68,7 @@ class SyncManager:
         env["STGUIAPIKEY"] = self.api_key
         env["STNORESTART"] = "1"
         self._proc = subprocess.Popen(
-            [str(self.bin), "home", str(self.home), "-no-browser", "-no-restart"],
+            [str(self.bin), f"-home={self.home}", "-no-browser", "-no-restart"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), env=env)
         # 等 REST 就绪 + 读取 device ID
@@ -89,6 +89,7 @@ class SyncManager:
                                    f"folder={self.sync_dir}")
 
     def _configure(self) -> None:
+        # 分步容错: options 失败不阻断文件夹配置（局域网本地发现默认开启）
         try:
             opts = self._rest("GET", "/rest/config/options")
             opts.update({
@@ -96,20 +97,27 @@ class SyncManager:
                 "localAnnounceEnabled": True,
                 "relaysEnabled": False,
                 "natEnabled": False,
-                "urAccepted": -1,
             })
             self._rest("PUT", "/rest/config/options", opts)
-            # 统一同步文件夹 data/sync/（默认开启，2.4.7）
+        except Exception as e:
+            self.node_core.log(
+                "warning", f"同步 options 设置失败（不影响局域网本地发现）: {e}")
+        try:
+            # 统一同步文件夹 data/sync/（默认开启，2.4.7）—— 以现有文件夹为模板
+            # 保证 schema 完整；按 id 端点 PUT（列表端点需数组）
             folders = self._rest("GET", "/rest/config/folders")
             if not any(f.get("id") == FOLDER_ID for f in folders):
-                self._rest("PUT", "/rest/config/folders", {
+                template = next((f for f in folders if f.get("id") == "default"),
+                                folders[0] if folders else {})
+                nf = dict(template)
+                nf.update({
                     "id": FOLDER_ID, "label": "agent-node sync",
                     "path": str(self.sync_dir), "type": "sendreceive",
-                    "rescanIntervalS": 3600, "fsWatcherEnabled": True,
-                    "devices": [{"deviceID": self.device_id}],
+                    "devices": [{"deviceID": self.device_id, "introducedBy": ""}],
                 })
+                self._rest("PUT", f"/rest/config/folders/{FOLDER_ID}", nf)
         except Exception as e:
-            self.node_core.log("warning", f"同步引擎配置失败: {e}")
+            self.node_core.log("warning", f"同步文件夹配置失败: {e}")
 
     def stop(self) -> None:
         try:
@@ -134,22 +142,29 @@ class SyncManager:
                 return
             self._paired.add(dev)
         try:
+            # 地址: dynamic（本地发现）+ beacon 携带的显式 IP（广播不可靠环境兜底）
+            addrs = ["dynamic"]
+            for ip in beacon_payload.get("ips") or []:
+                addrs.append(f"tcp://{ip}:22000")
             devices = self._rest("GET", "/rest/config/devices")
             if not any(d.get("deviceID") == dev for d in devices):
-                self._rest("PUT", "/rest/config/devices", {
+                template = devices[0] if devices else {}
+                nd = dict(template)
+                nd.update({
                     "deviceID": dev, "name": node_id or dev[:8],
-                    "addresses": ["dynamic"], "autoAcceptFolders": False,
+                    "addresses": addrs,
                 })
+                self._rest("PUT", f"/rest/config/devices/{dev}", nd)
                 self.node_core.log("info", f"同步互配: 已添加设备 {node_id} ({dev[:8]}...)")
-            # 共享文件夹给该设备
+            # 共享文件夹给该设备（按 id 端点 PUT 单个文件夹对象）
             folders = self._rest("GET", "/rest/config/folders")
             for f in folders:
                 if f.get("id") == FOLDER_ID:
                     devs = f.get("devices") or []
                     if not any(d.get("deviceID") == dev for d in devs):
-                        devs.append({"deviceID": dev})
+                        devs.append({"deviceID": dev, "introducedBy": ""})
                         f["devices"] = devs
-                        self._rest("PUT", f"/rest/config/folders", f)
+                        self._rest("PUT", f"/rest/config/folders/{FOLDER_ID}", f)
                     break
         except Exception as e:
             self.node_core.log("warning", f"同步互配失败 {node_id}: {e}")
@@ -164,8 +179,8 @@ class SyncManager:
             folders = self._rest("GET", "/rest/config/folders")
             for f in folders:
                 if f.get("id") == FOLDER_ID:
-                    f["devices"] = [{"deviceID": self.device_id}]
-                    self._rest("PUT", "/rest/config/folders", f)
+                    f["devices"] = [{"deviceID": self.device_id, "introducedBy": ""}]
+                    self._rest("PUT", f"/rest/config/folders/{FOLDER_ID}", f)
                     break
         except Exception:
             pass
