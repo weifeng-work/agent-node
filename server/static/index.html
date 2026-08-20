@@ -168,8 +168,8 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
   <span class="badge gray" id="tb-notif" style="cursor:pointer" onclick="switchView('overview')">通知 0</span>
 </div>
 <div id="nav">
-  <a data-view="overview" class="active">概览</a>
-  <a data-view="nodes">节点</a>
+  <a data-view="nodes" class="active">节点</a>
+  <a data-view="overview">概览</a>
   <a data-view="chat">消息</a>
   <a data-view="files">文件</a>
   <a data-view="executors">执行器</a>
@@ -178,7 +178,7 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
 </div>
 <div id="content">
 
-<div class="view active" id="view-overview">
+<div class="view" id="view-overview">
   <h2>概览</h2>
   <div class="grid">
     <div class="card">
@@ -201,7 +201,7 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
   </div>
 </div>
 
-<div class="view" id="view-nodes">
+<div class="view active" id="view-nodes">
   <h2>已知节点（离线不消失）</h2>
   <div class="subtabs" id="nodes-subtabs">
     <a data-ntab="online" class="active">在线</a>
