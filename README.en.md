@@ -125,6 +125,8 @@ No hub. No broker. Pure peer-to-peer. Design & protocol details:
 |---|---|
 | [skill/SKILL.md](skill/SKILL.md) | Official manual for AI agents (Chinese only — LLMs understand all major languages) |
 | [docs/协议与架构.md](docs/协议与架构.md) | Deep-dive doc (gated; wire-level protocol & architecture) |
+| [docs/executor-dev-guide.md](docs/executor-dev-guide.md) | Executor development guide (English) |
+| [docs/执行器开发指南.md](docs/执行器开发指南.md) | Executor development guide (Chinese) |
 | [CHANGELOG.md](CHANGELOG.md) | Changelog (Chinese) |
 | [VERSIONS.md](VERSIONS.md) | Dependency & binary version lock list |
 

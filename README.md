@@ -123,6 +123,8 @@ python -m tools.cli send "..." --node <node> --executor workbuddy
 | [skill/SKILL.md](skill/SKILL.md) | AI 智能体使用节点的官方说明书（不需要双语，大模型通晓主流语言） |
 | [docs/重构设计方案.md](docs/重构设计方案.md) | 施工方案、需求树、附录 A 线级协议 |
 | [docs/协议与架构.md](docs/协议与架构.md) | 深文档（门控，线级协议与架构完整规范） |
+| [docs/执行器开发指南.md](docs/执行器开发指南.md) | 开发者编写执行器插件的接口与功能实现指南 |
+| [docs/executor-dev-guide.md](docs/executor-dev-guide.md) | Executor development guide (English) |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 | [VERSIONS.md](VERSIONS.md) | 依赖与二进制版本锁定清单 |
 
