@@ -2,7 +2,7 @@
 
 用法:
     python -m node.main [--data-dir data] [--panel-port 5177] [--peer-tcp-port 0]
-                        [--no-sync] [--headless]
+                        [--no-sync]
 
 - 单实例保护（2.11.3）：已运行 → 拒绝并报错
 - 面板绑定 127.0.0.1（2.1.5），实际 URL 写 data/panel.url

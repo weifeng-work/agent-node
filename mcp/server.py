@@ -195,18 +195,32 @@ TOOLS = [
     # ⑤ 执行器
     {"name": "list_executors", "description": "本机+远程执行器统一枚举（executor_id=<node_id>/<agent_id> 全局寻址）",
      "inputSchema": _s({})},
-    {"name": "submit_task", "description": "统一调用执行器（透明路由本地/远程; task_id 可选幂等键，重试时复用）",
+    {"name": "submit_task", "description": "统一调用执行器（透明路由本地/远程; task_id 可选幂等键，重试时复用）。mode 三模式：sync=同步调用（阻塞等结果，一次拿到）；async=异步调用（立即返回，结果回执进你的异步邮箱，稍后 check_mail 取）；trigger=仅触达（只要触发成功确认，不要结果）。建议：简单快任务用 sync，长任务用 async，通知类用 trigger。",
      "inputSchema": _s({"executor_id": {"type": "string"},
                         "prompt": {"type": "string"},
-                        "mode": {"type": "string", "enum": ["sync", "async", "trigger"]},
+                        "mode": {"type": "string", "enum": ["sync", "async", "trigger"],
+                                 "description": "sync=同步调用/async=异步调用/trigger=仅触达"},
                         "attachments": {"type": "array", "items": {"type": "string"}},
                         "timeout": {"type": "number"},
                         "task_id": {"type": "string"}},
                        ["executor_id", "prompt"])},
     {"name": "get_task_result", "description": "查询任务结果（含未完成的进行中状态）",
      "inputSchema": _s({"task_id": {"type": "string"}}, ["task_id"])},
-    {"name": "check_inbox", "description": "取异步邮箱回执（caller_id 按父进程名自动派生，只返回自己的）",
+    {"name": "check_mail", "description": "取异步邮箱回执（caller_id 按父进程名自动派生，只返回自己的；异步任务结果经此取）",
      "inputSchema": _s({})},
+    {"name": "mail_all", "description": "异步邮箱全量（人类/面板视角，含已读未读，不标记已读）——供监控所有异步任务回执",
+     "inputSchema": _s({"limit": {"type": "integer"}})},
+    {"name": "cleanup_mail", "description": "清理异步邮箱（consumed=已读 / expired=未读）",
+     "inputSchema": _s({"mode": {"type": "string", "enum": ["consumed", "expired"]},
+                        "before": {"type": "string"}}, ["mode"])},
+    # 兼容别名（旧名 inbox 已更名 mailbox；保留旧名避免已接入客户端失效）
+    {"name": "check_inbox", "description": "（已更名 check_mail）取异步邮箱回执",
+     "inputSchema": _s({})},
+    {"name": "inbox_all", "description": "（已更名 mail_all）异步邮箱全量",
+     "inputSchema": _s({"limit": {"type": "integer"}})},
+    {"name": "cleanup_inbox", "description": "（已更名 cleanup_mail）清理异步邮箱",
+     "inputSchema": _s({"mode": {"type": "string", "enum": ["consumed", "expired"]},
+                        "before": {"type": "string"}}, ["mode"])},
     {"name": "get_executor_status", "description": "读执行器深态（本机直接/远程深查，受 allow_ai_task）",
      "inputSchema": _s({"executor_id": {"type": "string"}}, ["executor_id"])},
     {"name": "set_executor_suspend", "description": "挂起/恢复本机执行器（可设原因与到期时间点）",
@@ -240,9 +254,6 @@ TOOLS = [
                         "enabled": {"type": "boolean"}}, ["switch", "enabled"])},
     {"name": "set_run_as_admin", "description": "权限设置（需重启生效）",
      "inputSchema": _s({"enabled": {"type": "boolean"}}, ["enabled"])},
-    {"name": "cleanup_inbox", "description": "清理收件箱（consumed=已读 / expired=未读）",
-     "inputSchema": _s({"mode": {"type": "string", "enum": ["consumed", "expired"]},
-                        "before": {"type": "string"}}, ["mode"])},
     # ⑧ 远程命令
     {"name": "shell_exec", "description": "执行命令（target_node=空/本机→直接执行; 远程→受目标 allow_shell 管辖）",
      "inputSchema": _s({"target_node": {"type": "string"}, "command": {"type": "string"},
@@ -310,8 +321,13 @@ def dispatch_tool(name: str, args: dict) -> str:
             "timeout": a.get("timeout") or 600, "task_id": a.get("task_id")})
     elif name == "get_task_result":
         r = panel_call("GET", f"/api/task/result?task_id={a['task_id']}")
-    elif name == "check_inbox":
-        r = panel_call("GET", "/api/inbox")
+    elif name in ("check_mail", "check_inbox"):
+        r = panel_call("GET", "/api/mailbox")
+    elif name in ("mail_all", "inbox_all"):
+        r = panel_call("GET", f"/api/mailbox/all?limit={a.get('limit') or 300}")
+    elif name in ("cleanup_mail", "cleanup_inbox"):
+        r = panel_call("POST", "/api/mailbox/cleanup", {"mode": a["mode"],
+                                                        "before": a.get("before")})
     elif name == "get_executor_status":
         r = panel_call("GET", f"/api/executors/status?executor_id="
                               f"{urllib.parse.quote(a['executor_id'])}")
@@ -352,9 +368,6 @@ def dispatch_tool(name: str, args: dict) -> str:
     elif name == "set_run_as_admin":
         r = panel_call("POST", "/api/settings/admin",
                        {"enabled": a.get("enabled") is True})
-    elif name == "cleanup_inbox":
-        r = panel_call("POST", "/api/inbox/cleanup", {"mode": a["mode"],
-                                                      "before": a.get("before")})
     elif name == "shell_exec":
         r = panel_call("POST", "/api/shell", {
             "target_node_id": a.get("target_node") or None,

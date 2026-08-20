@@ -7,7 +7,8 @@
     task --target <node_id> --executor <agent_id> --prompt "..." [--mode async]
          [--timeout 600] [--attach file1,file2] [--task-id <幂等键>]
     check --task <task_id>       查询任务结果
-    inbox                        取异步邮箱回执
+    inbox                        取异步邮箱回执（旧名；已更名 mailbox）
+    mailbox                      取异步邮箱回执
     upload --to <node_id> --file <本地路径> [--target <目标路径>]
     download --from <node_id> --path <远程路径>   （拉到本机收件目录）
     ls --node <node_id> --path <路径> [--recursive]
@@ -85,7 +86,8 @@ def main() -> int:
     sp.add_argument("--task-id", default=None, help="幂等键（重试复用）")
     sp = sub.add_parser("check")
     sp.add_argument("--task", required=True)
-    sub.add_parser("inbox")
+    sp = sub.add_parser("inbox", help="取异步邮箱回执（旧名，同 mailbox）")
+    sub.add_parser("mailbox", help="取异步邮箱回执")
     sp = sub.add_parser("upload")
     sp.add_argument("--to", default="")
     sp.add_argument("--file", required=True)
@@ -139,8 +141,8 @@ def main() -> int:
             "timeout": a.timeout, "attachments": atts or None, "task_id": a.task_id}))
     elif a.cmd == "check":
         out(call("GET", f"/api/task/result?task_id={urllib.parse.quote(a.task)}"))
-    elif a.cmd == "inbox":
-        out(call("GET", "/api/inbox"))
+    elif a.cmd in ("inbox", "mailbox"):
+        out(call("GET", "/api/mailbox"))
     elif a.cmd == "upload":
         out(call("POST", "/api/files/push", {
             "node_id": a.to or None, "local_path": a.file, "target_path": a.target}))

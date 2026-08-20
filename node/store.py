@@ -1,8 +1,12 @@
 """comm.db —— SQLite 单库多表（2.14.1）:
-通信日志（2.3）+ inbox 异步邮箱（2.6.8）+ known peers（2.1.9）+ 聊天记录（2.8.2）。
+通信日志（2.3）+ mailbox 异步邮箱（2.6.8）+ known peers（2.1.9）+ 聊天记录（2.8.2）。
+
+命名约定（防混淆）:
+- `mailbox`（异步邮箱）: 异步任务回执，按 caller_id 归属 —— 与"文件收件箱"（data/inbox/ 目录）严格区分。
+- 文件收件箱 = 目录 data/inbox/（config.inbox_dir()），与 mailbox 无关。
 
 - WAL 模式 + 事务写入（2.17.5 并发写安全）
-- inbox「取走即标已读」（2.6.9）；通信日志保留全量审计
+- mailbox「取走即标已读」（2.6.9）；通信日志保留全量审计
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ CREATE TABLE IF NOT EXISTS comm_log (
 );
 CREATE INDEX IF NOT EXISTS idx_comm_peer ON comm_log(peer_node_id);
 CREATE INDEX IF NOT EXISTS idx_comm_corr ON comm_log(correlation_id);
-CREATE TABLE IF NOT EXISTS inbox (
+CREATE TABLE IF NOT EXISTS mailbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
     caller_id TEXT NOT NULL,
@@ -35,7 +39,7 @@ CREATE TABLE IF NOT EXISTS inbox (
     content TEXT NOT NULL,
     consumed INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_inbox_caller ON inbox(caller_id, consumed);
+CREATE INDEX IF NOT EXISTS idx_mailbox_caller ON mailbox(caller_id, consumed);
 CREATE TABLE IF NOT EXISTS known_peers (
     node_id TEXT PRIMARY KEY,
     name TEXT,
@@ -74,6 +78,21 @@ class Store:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA busy_timeout=5000")
         with self._lock, self._db:
+            # 旧版表名 inbox → mailbox（防与文件收件箱混淆；保留既有回执数据）
+            # 健壮性：仅当旧表存在且新表不存在时迁移，避免中途异常/双表并存导致崩溃
+            old = self._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='inbox'"
+            ).fetchone()
+            has_new = self._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='mailbox'"
+            ).fetchone()
+            if old and not has_new:
+                self._db.execute("ALTER TABLE inbox RENAME TO mailbox")
+                self._db.execute("DROP INDEX IF EXISTS idx_inbox_caller")
+            elif old and has_new:
+                # 双表并存（异常状态）：丢弃旧表数据，以新表为准，避免启动崩溃
+                self._db.execute("DROP TABLE IF EXISTS inbox")
+                self._db.execute("DROP INDEX IF EXISTS idx_inbox_caller")
             self._db.executescript(SCHEMA)
 
     # ---------- 通信日志（2.3） ----------
@@ -110,22 +129,22 @@ class Store:
             rows = self._db.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
 
-    # ---------- inbox（2.6） ----------
-    def add_inbox(self, caller_id: str, source_node_id: str | None, correlation_id: str | None,
-                  kind: str, content: dict) -> None:
+    # ---------- mailbox（2.6） ----------
+    def add_mail(self, caller_id: str, source_node_id: str | None, correlation_id: str | None,
+                 kind: str, content: dict) -> None:
         with self._lock, self._db:
             self._db.execute(
-                "INSERT INTO inbox(ts, caller_id, source_node_id, correlation_id, kind, content) "
+                "INSERT INTO mailbox(ts, caller_id, source_node_id, correlation_id, kind, content) "
                 "VALUES (?,?,?,?,?,?)",
                 (utcnow(), caller_id, source_node_id, correlation_id, kind,
                  json.dumps(content, ensure_ascii=False)),
             )
 
-    def fetch_inbox(self, caller_id: str, mark_consumed: bool = True) -> list[dict]:
+    def fetch_mail(self, caller_id: str, mark_consumed: bool = True) -> list[dict]:
         """未读邮件；取走即标已读（2.6.9）。"""
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM inbox WHERE caller_id=? AND consumed=0 ORDER BY id ASC",
+                "SELECT * FROM mailbox WHERE caller_id=? AND consumed=0 ORDER BY id ASC",
                 (caller_id,)).fetchall()
             items = []
             for r in rows:
@@ -138,12 +157,28 @@ class Store:
             if mark_consumed and items:
                 with self._db:
                     self._db.execute(
-                        "UPDATE inbox SET consumed=1 WHERE caller_id=? AND consumed=0",
+                        "UPDATE mailbox SET consumed=1 WHERE caller_id=? AND consumed=0",
                         (caller_id,))
             return items
 
-    def cleanup_inbox(self, mode: str = "consumed", before: str | None = None) -> int:
-        sql = "DELETE FROM inbox WHERE 1=1"
+    def list_mail_all(self, limit: int = 200) -> list[dict]:
+        """面板/人类视角：异步邮箱全量（不分 caller，含已读/未读；不标记已读）。
+        用于「异步回执对人类可见」的方案 A —— 人类有权查看全部任务回执。"""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM mailbox ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+        items = []
+        for r in rows:
+            item = dict(r)
+            try:
+                item["content"] = json.loads(item["content"])
+            except Exception:
+                item["content"] = {"raw": item["content"]}
+            items.append(item)
+        return items
+
+    def cleanup_mail(self, mode: str = "consumed", before: str | None = None) -> int:
+        sql = "DELETE FROM mailbox WHERE 1=1"
         args: list = []
         if mode == "consumed":
             sql += " AND consumed=1"

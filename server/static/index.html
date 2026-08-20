@@ -174,6 +174,7 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
   <a data-view="nodes" class="active">节点</a>
   <a data-view="overview">概览</a>
   <a data-view="chat">消息</a>
+  <a data-view="ainbox">异步邮箱</a>
   <a data-view="files">文件</a>
   <a data-view="executors">执行器</a>
   <a data-view="logs">日志</a>
@@ -244,6 +245,21 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
         <button class="btn primary" onclick="sendChat()">发送</button>
       </div>
     </div>
+  </div>
+</div>
+
+<div class="view" id="view-ainbox">
+  <h2>异步邮箱</h2>
+  <div class="row">
+    <button class="btn" onclick="loadAinbox()">刷新</button>
+    <button class="btn" onclick="cleanupInbox('consumed')">清已读</button>
+    <button class="btn danger" onclick="cleanupInbox('expired')">清全部未读</button>
+    <span class="hint">异步任务回执（可能很久才到）——人类可在此查看；AI 经 check_mail 取自己专属邮箱。</span>
+  </div>
+  <div style="max-height:68vh; overflow-y:auto">
+    <table id="ainbox-table"><thead><tr>
+      <th>时间</th><th>状态</th><th>caller_id</th><th>来源节点</th><th>任务ID</th><th>摘要</th>
+    </tr></thead><tbody></tbody></table>
   </div>
 </div>
 
@@ -429,7 +445,7 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
       <span class="hint">data/sync/ 文件夹（Syncthing），需重启生效</span>
     </div>
     <div class="row">
-      <label>收件箱清理</label>
+      <label>异步邮箱清理</label>
       <button class="btn" onclick="cleanupInbox('consumed')">清已读</button>
       <button class="btn danger" onclick="cleanupInbox('expired')">清全部未读</button>
     </div>
@@ -494,9 +510,52 @@ function switchView(v) {
   $("#view-" + v).classList.add("active");
   $$("#nav a").forEach(a => a.classList.toggle("active", a.dataset.view === v));
   if (v === "chat") loadConversations();
+  if (v === "ainbox") loadAinbox();
   if (v === "logs") { loadCommLog(); loadNodeLog(); }
+  // 记住当前页签：刷新后恢复到上次所在页签
+  try { localStorage.setItem("agent-node-view", v); } catch (e) {}
 }
 $$("#nav a").forEach(a => a.onclick = () => switchView(a.dataset.view));
+
+/* ---------- 异步邮箱（人类视角全量） ---------- */
+let _ainboxSeen = new Set();   // 已见过的回执 id（用于非模态通知去重）
+let _ainboxInit = false;       // 首次加载：只记录已有未读，不弹历史通知
+async function loadAinbox() {
+  try {
+    const r = await api("/api/mailbox/all?limit=300");
+    const items = r.items || [];
+    const tb = $("#ainbox-table tbody");
+    const html = items.map(it => {
+      const c = it.content || {};
+      const state = c.state || (c.ok ? "completed" : "failed");
+      const ok = c.ok || state === "completed";
+      const detail = c.content || c.detail || "";
+      const txt = (typeof detail === "string" ? detail : JSON.stringify(detail)).slice(0, 90);
+      return `<tr>
+        <td class="mono" style="font-size:11px">${esc((it.ts||"").replace("T"," ").slice(0,19))}</td>
+        <td><span class="badge ${ok ? "on" : "off"}">${esc(state)}</span>${it.consumed ? "" : ' <span class="badge blue">未读</span>'}</td>
+        <td class="mono" style="font-size:11px">${esc(it.caller_id || "")}</td>
+        <td class="mono" style="font-size:11px">${esc(it.source_node_id || "")}</td>
+        <td class="mono" style="font-size:11px">${esc(it.correlation_id || "")}</td>
+        <td style="max-width:320px">${esc(txt)}</td>
+      </tr>`;
+    }).join("") || '<tr><td colspan="6" class="hint">异步邮箱为空</td></tr>';
+    // 内容 diff 后才更新 DOM（不打断文本选择）
+    setHtmlIfChanged(tb, html);
+    // 非模态通知：仅对新到达的未读回执；首次加载只记录不弹历史积压
+    if (!_ainboxInit) {
+      items.forEach(it => { if (!it.consumed) _ainboxSeen.add(it.id); });
+      _ainboxInit = true;
+    } else if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      const fresh = items.filter(it => !it.consumed && !_ainboxSeen.has(it.id));
+      fresh.forEach(it => { _ainboxSeen.add(it.id); });
+      if (fresh.length) {
+        try { new Notification("agent-node 异步回执", { body: `有 ${fresh.length} 条新回执，请查看“异步邮箱”` }); }
+        catch (e) {}
+      }
+    }
+  } catch (e) {}
+}
 
 /* ---------- 概览 + 3s 局部轮询 ---------- */
 async function refreshOverview() {
@@ -1120,8 +1179,9 @@ async function toggleSync() {
   toast("已保存（重启节点生效）");
 }
 async function cleanupInbox(mode) {
-  const r = await api("/api/inbox/cleanup", { method: "POST", body: JSON.stringify({ mode })});
+  const r = await api("/api/mailbox/cleanup", { method: "POST", body: JSON.stringify({ mode })});
   toast(`已清理 ${r.deleted} 条`);
+  loadAinbox();
 }
 
 /* ---------- 轮询主循环（3s 局部数据轮询，2.1.6/4.4） ---------- */
@@ -1134,6 +1194,8 @@ async function pollLoop() {
   refreshOverview();
   refreshNodes();
   refreshExecutors();
+  // 异步邮箱轮询：持续检测新回执并弹非模态通知（只在有更新时重绘/通知）
+  loadAinbox();
   // 消息视图激活时每轮（3s）刷新：会话列表始终刷新（在线节点即现，选中文案时跳过）；
   // 打开了具体会话时再额外刷右侧消息区
   if ($("#view-chat").classList.contains("active")) {
@@ -1170,7 +1232,16 @@ $("#push-dir").addEventListener("change", e => {
   const el = document.getElementById(id);
   if (el) el.addEventListener("input", () => el.classList.add("unsaved"));
 });
-refreshOverview(); refreshNodes(); refreshExecutors(); loadSettings();
+// 异步邮箱非模态通知：请求浏览器通知权限（可选，拒绝则静默）
+if (typeof Notification !== "undefined" && Notification.permission === "default") {
+  try { Notification.requestPermission(); } catch (e) {}
+}
+// 恢复上次页签（无记录时保持 HTML 默认「节点」页签）
+try {
+  const saved = localStorage.getItem("agent-node-view");
+  if (saved && document.getElementById("view-" + saved)) switchView(saved);
+} catch (e) {}
+refreshOverview(); refreshNodes(); refreshExecutors(); loadAinbox(); loadSettings();
 setInterval(pollLoop, 3000);
 </script>
 </body>

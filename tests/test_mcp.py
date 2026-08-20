@@ -83,7 +83,8 @@ class TestMcpServer(unittest.TestCase):
         for expected in ("get_skill", "get_node_info", "list_nodes", "send_text",
                          "forget_node", "purge_node", "list_dir", "file_push",
                          "file_pull", "list_executors", "submit_task",
-                         "get_task_result", "check_inbox", "get_executor_status",
+                         "get_task_result", "check_inbox", "check_mail",
+                         "get_executor_status",
                          "set_executor_suspend", "restart_plugin", "get_comm_log",
                          "get_node_log", "get_config", "rename_node", "set_team",
                          "set_control_state", "shell_exec", "sync_now",
@@ -120,7 +121,7 @@ class TestMcpServer(unittest.TestCase):
         self.assertTrue(items, "MCP caller 应收到自己的异步回执")
         self.assertIn("Mock 执行结果", items[0]["content"]["content"])
         # 面板 caller（panel）看不到 MCP 进程的异步回执（caller 隔离）
-        panel_items = self.core.check_inbox("panel")
+        panel_items = self.core.check_mail("panel")
         self.assertFalse(any(i["correlation_id"] == inner["taskId"]
                              for i in panel_items))
 

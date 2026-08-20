@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 # release.sh 发版时自动覆盖为 tag（去掉前缀 v）；本地源码形态则被 git describe 覆盖
-VERSION = "0.1.9"
+VERSION = "0.1.10"
 
 
 def _git_describe() -> str | None:

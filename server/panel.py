@@ -178,14 +178,19 @@ def create_app(core) -> FastAPI:
     def task_result(task_id: str):
         return core.get_task_result(task_id)
 
-    # ---------- inbox ----------
-    @app.get("/api/inbox")
-    def inbox(request: Request):
-        return {"ok": True, "items": core.check_inbox(caller_id(request))}
+    # ---------- mailbox（异步邮箱；与文件收件箱 data/inbox/ 严格区分） ----------
+    @app.get("/api/mailbox")
+    def mailbox(request: Request):
+        return {"ok": True, "items": core.check_mail(caller_id(request))}
 
-    @app.post("/api/inbox/cleanup")
-    async def inbox_cleanup(body: dict):
-        return core.cleanup_inbox(body.get("mode") or "consumed", body.get("before"))
+    @app.get("/api/mailbox/all")
+    def mailbox_all(limit: int = 200):
+        """面板/人类视角：异步邮箱全量（含已读/未读，不标记已读）。"""
+        return {"ok": True, "items": core.mail_all(limit)}
+
+    @app.post("/api/mailbox/cleanup")
+    async def mailbox_cleanup(body: dict):
+        return core.cleanup_mail(body.get("mode") or "consumed", body.get("before"))
 
     # ---------- 日志（2.3 / 2.9.7） ----------
     @app.get("/api/logs/comm")

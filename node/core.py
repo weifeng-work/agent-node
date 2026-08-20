@@ -795,7 +795,7 @@ class NodeCore:
                     self._async_pending_ts.pop(task_id, None)
             if pending:
                 content = self._extract_task_content(task)
-                self.store.add_inbox(
+                self.store.add_mail(
                     pending.get("callerId") or "unknown",
                     env.get("sender_node_id"), task_id, "task_result",
                     {"ok": task.get("status", {}).get("state") == "completed",
@@ -1241,7 +1241,7 @@ class NodeCore:
     def store_local_async_result(self, record) -> None:
         """本机异步任务完成 → 回执直接进调用者邮箱（2.6.5 caller 归属）。"""
         ok = record.state == a2a.TASK_COMPLETED
-        self.store.add_inbox(
+        self.store.add_mail(
             record.caller_id or "unknown", None, record.task_id, "task_result",
             {"ok": ok, "taskId": record.task_id, "agentId": record.agent_id,
              "state": record.state, "error": record.error, "content": record.content})
@@ -1330,12 +1330,16 @@ class NodeCore:
         except Exception:
             pass
 
-    # ---------- inbox ----------
-    def check_inbox(self, caller_id: str) -> list[dict]:
-        return self.store.fetch_inbox(caller_id)
+    # ---------- mailbox ----------
+    def check_mail(self, caller_id: str) -> list[dict]:
+        return self.store.fetch_mail(caller_id)
 
-    def cleanup_inbox(self, mode: str, before: str | None = None) -> dict:
-        n = self.store.cleanup_inbox(mode, before)
+    def mail_all(self, limit: int = 200) -> list[dict]:
+        """面板/人类视角：异步邮箱全量（含已读/未读；不标记已读）。"""
+        return self.store.list_mail_all(limit)
+
+    def cleanup_mail(self, mode: str, before: str | None = None) -> dict:
+        n = self.store.cleanup_mail(mode, before)
         return {"ok": True, "deleted": n}
 
     # ---------- 设置类（本机全权，远程不可改） ----------

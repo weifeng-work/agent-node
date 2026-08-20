@@ -181,7 +181,7 @@ class TestTwoNodes(unittest.TestCase):
         deadline = time.time() + 40
         items = []
         while time.time() < deadline:
-            items = self.core_a.check_inbox("ai-test-caller")
+            items = self.core_a.check_mail("ai-test-caller")
             if items:
                 break
             time.sleep(1)
@@ -190,7 +190,7 @@ class TestTwoNodes(unittest.TestCase):
         self.assertTrue(items[0]["content"]["ok"])
         self.assertIn("Mock 执行结果", items[0]["content"]["content"])
         # 取走即已读
-        self.assertEqual(self.core_a.check_inbox("ai-test-caller"), [])
+        self.assertEqual(self.core_a.check_mail("ai-test-caller"), [])
 
     def test_12_task_trigger(self):
         """2.7.1: 触发型只需节点层触发确认，无结果回执。"""
@@ -199,7 +199,7 @@ class TestTwoNodes(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertTrue(r.get("triggered"))
         time.sleep(3)  # 触发后执行完不推回执
-        self.assertEqual(self.core_a.check_inbox("panel"), [])
+        self.assertEqual(self.core_a.check_mail("panel"), [])
 
     def test_13_task_idempotent_by_task_id(self):
         """2.13.5: 应用层幂等 —— 复用同一 task_id 不重复执行。"""
@@ -285,7 +285,7 @@ class TestTwoNodes(unittest.TestCase):
         deadline = time.time() + 40
         items = []
         while time.time() < deadline:
-            items = _http("GET", base + "/api/inbox",
+            items = _http("GET", base + "/api/mailbox",
                           headers={"X-Caller-Id": "panel-rest-test"})["items"]
             if items:
                 break
