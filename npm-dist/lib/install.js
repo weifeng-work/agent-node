@@ -74,17 +74,19 @@ async function main() {
   // Step 3: 复制项目文件
   step(3, TOTAL, "部署项目文件...", "Deploying project files...");
   try {
-    copyDir(PKG_APP_DIR, APP_DIR);
+    // 排除 data_synth 模板（syncthing 二进制单独释放到 data/，避免 app/ 里留重复文件）
+    // Exclude data_synth template (syncthing binary released separately to data/, avoid duplicate in app/)
+    copyDir(PKG_APP_DIR, APP_DIR, ["data_synth"]);
     log("✓ 文件部署完成", "Files deployed");
   } catch (e) {
     log(`❌ 文件部署失败: ${e.message}`, `Deploy failed: ${e.message}`);
     process.exit(1);
   }
 
-  // 释放 syncthing 二进制: 包内随 app 部署在 data_synth/syncthing/，运行时需 data/syncthing/
-  // Release syncthing binary: bundled under app/data_synth/syncthing/, runtime expects data/syncthing/
+  // 释放 syncthing 二进制: 包内随包分发于 data_synth/syncthing/（npm 包内位置），运行时需 data/syncthing/
+  // Release syncthing binary: bundled under data_synth/syncthing/ (inside npm package), runtime expects data/syncthing/
   try {
-    const bundled = path.join(APP_DIR, "data_synth", "syncthing", "syncthing.exe");
+    const bundled = path.join(PKG_APP_DIR, "data_synth", "syncthing", "syncthing.exe");
     const dest = path.join(DATA_DIR, "syncthing", "syncthing.exe");
     if (fs.existsSync(bundled) && !fs.existsSync(dest)) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -96,6 +98,10 @@ async function main() {
     } else {
       log("✓ syncthing 二进制已存在", "Syncthing binary already present");
     }
+    // 清理旧版本部署到 app/ 的 data_synth 残留（v0.1.5 起只保留包内一份）
+    // Remove leftover app/data_synth from older versions (since v0.1.5 kept only inside package)
+    const staleTpl = path.join(APP_DIR, "data_synth");
+    if (fs.existsSync(staleTpl)) fs.rmSync(staleTpl, { recursive: true, force: true });
   } catch (e) {
     log(`⚠ syncthing 二进制释放失败: ${e.message}`,
         `⚠ Failed to deploy syncthing binary: ${e.message}`);
@@ -159,15 +165,15 @@ async function main() {
   console.log();
 }
 
-function copyDir(src, dest) {
+function copyDir(src, dest, exclude = []) {
   const entries = fs.readdirSync(src, { withFileTypes: true });
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of entries) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === "__pycache__" || entry.name === ".git") continue;
-      copyDir(srcPath, destPath);
+      if (entry.name === "__pycache__" || entry.name === ".git" || exclude.includes(entry.name)) continue;
+      copyDir(srcPath, destPath, exclude);
     } else {
       fs.copyFileSync(srcPath, destPath);
     }
