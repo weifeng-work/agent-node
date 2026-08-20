@@ -584,13 +584,39 @@ async function addManualPeer() {
 async function loadConversations() {
   const r = await api("/api/chat/conversations");
   const el = $("#conv-list");
-  el.innerHTML = (r.conversations || []).map(c => {
+  /* 并集聚合: 会话(真正发过消息) + 已知/在线节点(未聊过也列出, 便于发起) */
+  const convs = r.conversations || [];
+  const seen = new Set();
+  const merged = [];
+  for (const c of convs) {                // 先放真正有消息的会话
+    merged.push({ peer_node_id: c.peer_node_id, msg_count: c.msg_count,
+                  last_ts: c.last_ts, hasChat: true });
+    seen.add(c.peer_node_id);
+  }
+  for (const n of state.nodes || []) {     // 再补已知节点(未聊过)
+    if (seen.has(n.nodeId)) continue;
+    merged.push({ peer_node_id: n.nodeId, hasChat: false });
+    seen.add(n.nodeId);
+  }
+  /* 排序: 有聊天的按最后消息时间倒序; 未聊的排在其后(在线优先) */
+  merged.sort((a, b) => {
+    if (a.last_ts && b.last_ts) return b.last_ts < a.last_ts ? -1 : (b.last_ts > a.last_ts ? 1 : 0);
+    if (a.last_ts) return -1;
+    if (b.last_ts) return 1;
+    const na = state.nodes.find(x => x.nodeId === a.peer_node_id) || {};
+    const nb = state.nodes.find(x => x.nodeId === b.peer_node_id) || {};
+    return (nb.online ? 1 : 0) - (na.online ? 1 : 0);
+  });
+  el.innerHTML = merged.map(c => {
     const n = state.nodes.find(x => x.nodeId === c.peer_node_id);
     const name = (n && n.name) || c.peer_node_id;
+    const badge = c.hasChat
+      ? `<span class="hint">${c.msg_count} 条 · ${esc((c.last_ts||"").slice(5,16))}</span>`
+      : `<span class="hint">${n && n.online ? "在线" : "已知节点"} · 未开始聊天</span>`;
     return `<div class="conv ${state.currentChat === c.peer_node_id ? "active" : ""}"
       onclick="openChat('${esc(c.peer_node_id)}')">
-      <b>${esc(name)}</b><br><span class="hint">${c.msg_count} 条 · ${esc((c.last_ts||"").slice(5,16))}</span></div>`;
-  }).join("") || '<p class="hint">暂无会话</p>';
+      <b>${esc(name)}</b><br>${badge}</div>`;
+  }).join("") || '<p class="hint">暂无节点</p>';
 }
 async function openChat(peerId) {
   state.currentChat = peerId;

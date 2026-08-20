@@ -6,13 +6,13 @@
 #
 # 无需任何 npm token —— 用 GitHub OIDC 身份直接与 npm 交换短期凭证（Trusted Publishing）。
 # 前提: 需在 npmjs.com 给本包配置 Trusted Publisher，绑定：
-#   Owner = weifeng-work / Repository = agent-node / Workflow = release.yml
+#   Owner = weifeng-work / Repository = agent-node / Workflow = agent-node-release.yml
 #
 # 注意:
 #   - 不要给 actions/setup-node 传 registry-url（会写 .npmrc 的 token 行，与 OIDC 冲突）
 #   - 必须声明 permissions.id-token: write 才能交换 OIDC token
 #   - npm >= 11.5.1、Node >= 22.14（由 setup-node 提供）
-name: release
+name: agent-node release
 
 on:
   push:
