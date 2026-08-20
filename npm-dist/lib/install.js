@@ -65,7 +65,8 @@ async function main() {
 
   // Step 2: 创建目录结构
   step(2, TOTAL, "创建目录...", "Creating directories...");
-  [INSTALL_DIR, APP_DIR, DATA_DIR, path.join(DATA_DIR, "inbox"), path.join(DATA_DIR, "sync")].forEach(d => {
+  [INSTALL_DIR, APP_DIR, DATA_DIR, path.join(DATA_DIR, "inbox"),
+   path.join(DATA_DIR, "sync"), path.join(DATA_DIR, "syncthing")].forEach(d => {
     fs.mkdirSync(d, { recursive: true });
   });
   log(`✓ 安装目录: ${INSTALL_DIR}`, `Install dir: ${INSTALL_DIR}`);
@@ -78,6 +79,26 @@ async function main() {
   } catch (e) {
     log(`❌ 文件部署失败: ${e.message}`, `Deploy failed: ${e.message}`);
     process.exit(1);
+  }
+
+  // 释放 syncthing 二进制: 包内随 app 部署在 data_synth/syncthing/，运行时需 data/syncthing/
+  // Release syncthing binary: bundled under app/data_synth/syncthing/, runtime expects data/syncthing/
+  try {
+    const bundled = path.join(APP_DIR, "data_synth", "syncthing", "syncthing.exe");
+    const dest = path.join(DATA_DIR, "syncthing", "syncthing.exe");
+    if (fs.existsSync(bundled) && !fs.existsSync(dest)) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(bundled, dest);
+      log("✓ syncthing 二进制已就位", "Syncthing binary in place");
+    } else if (!fs.existsSync(bundled)) {
+      log("⚠ 包内未找到 syncthing 二进制（同步功能不可用）",
+          "⚠ syncthing binary not found in package (sync unavailable)");
+    } else {
+      log("✓ syncthing 二进制已存在", "Syncthing binary already present");
+    }
+  } catch (e) {
+    log(`⚠ syncthing 二进制释放失败: ${e.message}`,
+        `⚠ Failed to deploy syncthing binary: ${e.message}`);
   }
 
   // Step 4: 创建 venv 并安装依赖
