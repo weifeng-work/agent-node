@@ -101,6 +101,9 @@ def main() -> int:
     sp.add_argument("--to", default="")
     sp.add_argument("--command", "--cmd", dest="command", required=True)
     sp.add_argument("--timeout", type=float, default=60)
+    sp = sub.add_parser("node-update", help="远程更新目标节点的代码（发 agent-node update）")
+    sp.add_argument("--node", required=True, help="目标节点 node_id")
+    sp.add_argument("--timeout", type=float, default=300)
     sub.add_parser("sync")
     sub.add_parser("diag")
     sp = sub.add_parser("executors", help="执行器列表")
@@ -148,6 +151,15 @@ def main() -> int:
         out(call("POST", "/api/shell", {
             "target_node_id": a.to or None, "command": a.command,
             "timeout": a.timeout}))
+    elif a.cmd == "node-update":
+        # 远程更新目标节点代码：经 shell_exec 调对端 agent-node update
+        r = call("POST", "/api/shell", {
+            "target_node_id": a.node, "command": "agent-node update",
+            "timeout": a.timeout})
+        out(r)
+        if r.get("ok") or (r.get("output") or "").strip():
+            print("\n更新命令已送达，目标节点将拉取 npm 最新代码并重部署。")
+            print("生效需目标节点手动执行: agent-node restart")
     elif a.cmd == "sync":
         out(call("POST", "/api/sync/now", {}))
     elif a.cmd == "diag":

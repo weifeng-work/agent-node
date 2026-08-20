@@ -60,6 +60,8 @@ const T = {
     "  agent-node            启动（已运行则打开面板）/ Start (or open panel)",
     "  agent-node stop       停止 / Stop",
     "  agent-node status     状态 / Status",
+    "  agent-node update     更新代码（拉取 npm 最新版，需重启生效）/ Update code (pull latest from npm, restart to apply)",
+    "  agent-node restart    重启节点 / Restart node",
     "  agent-node setup      安装或修复 / Install or repair",
     "  agent-node uninstall  卸载 / Uninstall",
     "",
@@ -256,6 +258,54 @@ function cmdSetup() {
   });
 }
 
+function cmdUpdate() {
+  console.log(T.banner.join("\n"));
+  msgPair("正在检查 npm 最新版本...", "Checking npm for latest version...");
+  console.log();
+  const { execSync } = require("child_process");
+  // 1) 查 npm 上最新可用版本（信息展示用，实际不传=latest）
+  let latest = "?";
+  try {
+    const pkg = JSON.parse(execSync(
+      "npm view @weifeng-work/agent-node version --json",
+      { encoding: "utf-8", stdio: ["pipe","pipe","ignore"], windowsHide: true }));
+    latest = String(pkg).trim() || "?";
+  } catch (e) {
+    console.log("  ⚠ 无法查询 npm 最新版本:" + e.message);
+  }
+  console.log(`  npm 最新版本 / npm latest: ${latest}`);
+  console.log();
+  // 2) 重新安装最新全局包（不传版本 = 拉 latest）
+  try {
+    msgPair("  正在拉取最新版本并安装...", "  Pulling latest and installing...");
+    execSync(`npm install -g @weifeng-work/agent-node --unsafe-perm`,
+             { encoding: "utf-8", stdio: "inherit", windowsHide: true });
+    console.log();
+  } catch (e) {
+    console.log("  ❌ 更新失败:" + e.message);
+    process.exit(1);
+  }
+  // 3) 重新部署 Python 源码（install.js 会重建 %LOCALAPPDATA%\agent-node\app）
+  console.log();
+  msgPair("正在重新部署节点源码...", "Re-deploying node source...");
+  runInstaller().then(() => {
+    console.log();
+    msgPair("✅ 代码已更新到最新版。", "✅ Code updated to latest.");
+    msgPair("  重启节点生效 / Restart node to apply:", "    agent-node restart");
+    console.log();
+  }).catch(e => {
+    console.error("  Install error:", e.message);
+    process.exit(1);
+  });
+}
+
+function cmdRestart() {
+  console.log(T.banner.join("\n"));
+  const wasRunning = isRunning();
+  if (wasRunning) cmdStop();
+  cmdStart();
+}
+
 function cmdUninstall() {
   console.log(T.banner.join("\n"));
   msgPair("正在卸载...", "Uninstalling...");
@@ -331,6 +381,8 @@ switch (cmd) {
   case "stop": cmdStop(); break;
   case "status": cmdStatus(); break;
   case "setup": cmdSetup(); break;
+  case "update": cmdUpdate(); break;
+  case "restart": cmdRestart(); break;
   case "uninstall": cmdUninstall(); break;
   case "help": case "--help": case "-h":
     console.log(T.banner.join("\n"));
