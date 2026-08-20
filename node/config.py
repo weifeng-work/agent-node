@@ -33,7 +33,7 @@ DEFAULT_CONFIG: dict = {
     "peer_tcp_port": 0,
     "manual_peers": [],
     "sync_enabled": True,
-    "enable_mock": True,
+    "enable_mock": False,  # 内置 mock 测试桩默认关闭（生产不加载；测试/验收显式开启，2.x）
     "discovery_ports": DEFAULT_DISCOVERY_PORTS,
 }
 
@@ -135,8 +135,8 @@ class NodeConfig:
 
     @property
     def enable_mock(self) -> bool:
-        """内置 mock 测试桩开关（第五章 #4；验收完成后可关，改 false 重启生效）。"""
-        return bool(self._cfg.get("enable_mock", True))
+        """内置 mock 测试桩开关（第五章 #4；生产默认关，测试/验收时设 true 开启）。"""
+        return bool(self._cfg.get("enable_mock", False))
 
     @property
     def run_as_admin(self) -> bool:

@@ -11,10 +11,16 @@ from executors.registry import ExecutorRegistry
 
 
 class _FakeCore:
-    """注册表最小依赖桩。"""
+    """为 registry 提供最小 node_core 接口（单测桩）。"""
 
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, enable_mock: bool = True):
         self.data_dir = data_dir
+        # 测试需 mock 执行器，预写 node_config.json 显式开启 enable_mock
+        # （生产默认关，见 node/config.py DEFAULT_CONFIG，2.x）
+        cfg = data_dir / "node_config.json"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text('{"enable_mock": ' + ("true" if enable_mock else "false") +
+                       '}', encoding="utf-8")
         from node.config import NodeConfig
         self.config = NodeConfig(data_dir)
         from node.store import Store

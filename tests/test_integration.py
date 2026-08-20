@@ -46,6 +46,12 @@ class TestTwoNodes(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         root = Path(cls.tmp.name)
+        # 集成测试依赖 mock 执行器（生产默认关闭），预写配置显式开启（2.x）
+        for sub in ("a", "b"):
+            d = root / sub
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "node_config.json").write_text(
+                '{"enable_mock": true}', encoding="utf-8")
         cls.core_a = NodeCore(root / "a", panel_port=PANEL_A)
         cls.core_a.config.peer_tcp_port = PORT_A
         cls.core_b = NodeCore(root / "b", panel_port=PANEL_B)
