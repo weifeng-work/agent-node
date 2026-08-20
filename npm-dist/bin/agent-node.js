@@ -278,7 +278,7 @@ function cmdUpdate() {
   // 2) 重新安装最新全局包（不传版本 = 拉 latest）
   try {
     msgPair("  正在拉取最新版本并安装...", "  Pulling latest and installing...");
-    execSync(`npm install -g @weifeng-work/agent-node --unsafe-perm`,
+    execSync(`npm install -g @weifeng-work/agent-node`,
              { encoding: "utf-8", stdio: "inherit", windowsHide: true });
     console.log();
   } catch (e) {
