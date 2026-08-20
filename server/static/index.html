@@ -164,6 +164,7 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
   <div id="status-light" class="running"></div>
   <span class="title" id="tb-name">agent-node</span>
   <span class="sub mono" id="tb-nodeid"></span>
+  <span class="badge blue" id="tb-version"></span>
   <span class="sub" id="tb-status"></span>
   <div class="spacer"></div>
   <span class="sub" id="tb-sync"></span>
@@ -506,6 +507,7 @@ async function refreshOverview() {
     light.className = ov.busy ? "busy" : "running";
     $("#tb-name").textContent = ov.name;
     $("#tb-nodeid").textContent = ov.nodeId;
+    $("#tb-version").textContent = "v" + (ov.version || "?");
     $("#tb-status").textContent = `运行 ${Math.floor(ov.uptimeSec/60)} 分钟 · ` +
       (ov.busy ? "有任务处理中" : "空闲");
     $("#tb-sync").textContent = ov.sync.enabled ? "同步: 开" : "同步: 关";

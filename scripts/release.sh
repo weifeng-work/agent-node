@@ -45,6 +45,17 @@ PY
 )"
 echo "✓ 版本号已写入 $PKG_JSON"
 
+# ---- 2.5) 把版本号写入 node/version.py（唯一事实来源=tag；面板/命令行启动读取） ----
+VERSION_PY="$ROOT/node/version.py"
+python3 - "$VERSION_PY" "$VERSION" <<'PY'
+import re, sys
+p, v = sys.argv[1], sys.argv[2]
+s = open(p, encoding="utf-8").read()
+s = re.sub(r'VERSION\s*=\s*"[^"]*"', f'VERSION = "{v}"', s, count=1)
+open(p, "w", encoding="utf-8").write(s)
+PY
+echo "✓ 版本号已写入 $VERSION_PY"
+
 # ---- 3) 构建 npm-dist/app（同步最新源码+文档+二进制） ----
 echo "▶ 运行 build_npm.py（同步源码→ npm-dist/app/）..."
 python3 "$ROOT/scripts/build_npm.py"

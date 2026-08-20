@@ -28,6 +28,7 @@ from executors.registry import ExecutorRegistry
 from node import a2a
 from node.config import NodeConfig
 from node.store import Store, utcnow
+from node.version import VERSION
 from transport import protocol as P
 from transport.beacon import BeaconService, build_beacon_payload
 from transport.mesh import MeshManager
@@ -816,6 +817,7 @@ class NodeCore:
         busy = any(e.get("state") == "busy" for e in local_execs)
         return {
             "nodeId": self.node_id,
+            "version": VERSION,
             "name": self.config.name,
             "teamId": self.config.team_id,
             "host": socket.gethostname(),

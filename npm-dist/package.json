@@ -1,6 +1,6 @@
 {
   "name": "@weifeng-work/agent-node",
-  "version": "0.1.0",
+  "version": "0.1.9",
   "description": "Decentralized LAN multi-agent collaboration node — AI-controllable enhanced LocalSend (去中心化局域网多智能体协作节点)",
   "keywords": [
     "agent",

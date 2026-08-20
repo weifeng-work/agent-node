@@ -26,6 +26,8 @@ const PANEL_URL_FILE = path.join(DATA_DIR, "panel.url");
 const LOCK_FILE = path.join(DATA_DIR, "node.lock");
 const REPO_URL = "https://github.com/weifeng-work/agent-node";
 const DEFAULT_PANEL_PORT = 5177;  // 默认面板端口（与 server/panel.py DEFAULT_PANEL_PORT 一致）
+// npm 包版本（版本号统一来源；面板/命令行启动均显示）
+const PKG_VERSION = require(path.join(__dirname, "..", "package.json")).version || "?";
 
 // ---------- 双语文案 / Bilingual messages ----------
 const T = {
@@ -361,6 +363,7 @@ function showSkillGuide() {
 
 function showUsage() {
   T.usage.forEach(l => console.log(l));
+  console.log(`  版本 / Version:  v${PKG_VERSION}`);
   console.log(`  面板 / Panel:  ${getPanelUrl()}`);
   console.log(`  文档 / Docs:   ${REPO_URL}`);
   console.log();
