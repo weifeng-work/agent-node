@@ -20,5 +20,8 @@ env/
 *.swp
 
 deploy.tgz
-bin/
 data/
+
+# npm 构建产物（build_npm.py 由 bin/ + 源码再生）
+npm-dist/app/
+npm-dist/*.tgz

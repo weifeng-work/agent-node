@@ -1,4 +1,8 @@
-fastapi>=0.110
-uvicorn>=0.29
+# 版本由 VERSIONS.md 锁定（~= 兼容已实测的大版本，向上限自动接受补丁版）
+fastapi~=0.141
+uvicorn~=0.52
+starlette~=1.6   # fastapi 传递依赖，显式锁定避免拉取破坏性大版本
+pydantic~=2.13  # fastapi/pydantic-settings 传递依赖基线
 # GUI 执行器适配器（WorkBuddy UIA 注入）需要；纯 Python 包，缺失时节点仍可运行（对应适配器不加载）
-pywinauto>=0.6.8 ; sys_platform == "win32"
+pywinauto~=0.6.9 ; sys_platform == "win32"
+comtypes~=1.4 ; sys_platform == "win32"  # pywinauto 传递依赖（COM 线程亲和关键）

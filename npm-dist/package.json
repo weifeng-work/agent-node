@@ -1,0 +1,40 @@
+{
+  "name": "@weifeng-work/agent-node",
+  "version": "0.1.0",
+  "description": "Decentralized LAN multi-agent collaboration node — AI-controllable enhanced LocalSend (去中心化局域网多智能体协作节点)",
+  "keywords": [
+    "agent",
+    "multi-agent",
+    "ai",
+    "lan",
+    "p2p",
+    "localsend",
+    "codebuddy",
+    "workbuddy",
+    "mcp",
+    "decentralized"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/weifeng-work/agent-node.git"
+  },
+  "bin": {
+    "agent-node": "bin/agent-node.js"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "os": [
+    "win32"
+  ],
+  "files": [
+    "bin/",
+    "lib/",
+    "app/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node lib/install.js"
+  }
+}
