@@ -203,6 +203,10 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
 
 <div class="view" id="view-nodes">
   <h2>已知节点（离线不消失）</h2>
+  <div class="subtabs" id="nodes-subtabs">
+    <a data-ntab="online" class="active">在线</a>
+    <a data-ntab="all">全部</a>
+  </div>
   <div class="card">
     <table id="nodes-table">
       <thead><tr>
@@ -539,12 +543,16 @@ async function toggleSwitch(k, v) {
 }
 
 /* ---------- 节点 ---------- */
+let nodesTab = "online";
 async function refreshNodes() {
   try {
     const r = await api("/api/nodes");
     state.nodes = r.nodes || [];
     const tb = $("#nodes-table tbody");
-    tb.innerHTML = state.nodes.map(n => `
+    /* 按 tab 过滤: online=只在线的真节点; all=全部历史（含测试残留） */
+    const list = nodesTab === "all" ? state.nodes
+      : state.nodes.filter(n => n.online);
+    tb.innerHTML = list.map(n => `
       <tr>
         <td><b>${esc(n.name)}</b></td>
         <td class="mono">${esc(n.nodeId)}</td>
@@ -567,6 +575,14 @@ async function refreshNodes() {
       .map(n => `<option value="${esc(n.nodeId)}">${esc(n.name)}</option>`).join("");
   } catch (e) {}
 }
+function switchNodesTab(tab) {
+  nodesTab = tab;
+  $$("#nodes-subtabs a").forEach(a => a.classList.toggle("active", a.dataset.ntab === tab));
+  refreshNodes();
+}
+document.querySelectorAll("#nodes-subtabs a").forEach(a => {
+  a.addEventListener("click", () => switchNodesTab(a.dataset.ntab));
+});
 async function forgetNode(id) {
   if (!confirm("忘记该节点？（从已知列表移除，不影响对方）")) return;
   await api("/api/nodes/forget", { method: "POST", body: JSON.stringify({ node_id: id })});
