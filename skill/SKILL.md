@@ -2,6 +2,8 @@
 
 > 本文件是智能体（AI）使用 agent-node 节点能力的**唯一官方说明书**。
 > 架构与接口已稳定（2026-08-20）。加载本 skill 即学会与本机节点及全网节点协作。
+> 提示：AI 也可经 MCP 工具 `get_skill` 重新读取本手册全文；深度架构/协议文档在
+> `docs/`，用 `get_skill(doc=<文档名>)`（如 协议与架构 / 重构设计方案）按需读取。
 
 ## 一、这是什么
 
@@ -24,25 +26,30 @@ MCP 客户端 JSON 配置：
     "agent-node": {
       "command": "python",
       "args": ["-m", "mcp.server"],
-      "cwd": "E:/agent-node",
+      "cwd": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/app",
       "env": {
-        "AGENT_NODE_PANEL": "http://127.0.0.1:5177",
-        "AGENT_NODE_CALLER_ID": "你的稳定ID如 my-ai-01"
+        "AGENT_NODE_PANEL": "http://127.0.0.1:5177"
       }
     }
   }
 }
 ```
 
+> `cwd` 填你机器上节点的 **app 安装目录**（默认 `%LOCALAPPDATA%\agent-node\app`；运行
+> `agent-node` 命令，其 MCP 引导会打印你机器上的真实路径）。`AGENT_NODE_PANEL` 的
+> `5177` 是**默认**面板端口，若被占用节点会自动改用 5178…，实际地址以
+> `agent-node status` 或启动日志显示为准。
+
 **caller_id 是你的身份**（MCP server 进程身份，随每次工具调用自动注入，
 你无需记住它）。**caller_id 对应你的专属收件箱**——异步任务回执只进你的邮箱，
-其他 AI 客户端看不到。`AGENT_NODE_CALLER_ID` 环境变量可自定义；不设则首启
-自动生成 UUID 并复用。
+其他 AI 客户端看不到。caller_id 由系统在 MCP server 启动时读取**父进程可执行名**
+（如 workbuddy/trae）自动派生：同一客户端重启后 id 不变、不同客户端 id 不同、
+本机不冲突，**无需配置**。
 
 ### 方式 B: CLI（不支持 MCP 但有 Bash 能力的智能体）
 
 ```bash
-cd E:/agent-node
+cd %LOCALAPPDATA%\agent-node\app   # 到节点安装目录（默认；以你机器实际为准）
 python tools/cli.py register          # 首次: 生成 caller_id 身份文件
 python tools/cli.py list              # 已知节点列表
 python tools/cli.py task --target <node_id> --executor <agent_id> \
@@ -50,8 +57,8 @@ python tools/cli.py task --target <node_id> --executor <agent_id> \
 python tools/cli.py inbox             # 取异步回执（caller_id 自动注入）
 ```
 
-环境变量: `AGENT_NODE_PANEL`（面板地址，默认 http://127.0.0.1:5177）、
-`AGENT_NODE_CALLER_ID`。
+环境变量: `AGENT_NODE_PANEL`（面板地址，默认 http://127.0.0.1:5177）。
+caller_id 无需配置（MCP 自动派生；CLI 用 `cli.py register` 生成身份）。
 
 ## 三、核心概念（防混淆）
 

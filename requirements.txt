@@ -6,3 +6,5 @@ pydantic~=2.13  # fastapi/pydantic-settings 传递依赖基线
 # GUI 执行器适配器（WorkBuddy UIA 注入）需要；纯 Python 包，缺失时节点仍可运行（对应适配器不加载）
 pywinauto~=0.6.9 ; sys_platform == "win32"
 comtypes~=1.4 ; sys_platform == "win32"  # pywinauto 传递依赖（COM 线程亲和关键）
+# TraeWork CN GUI 适配器（CDP 注入）需要；缺失时节点仍可运行（对应适配器不加载）
+websockets~=15.0 ; sys_platform == "win32"

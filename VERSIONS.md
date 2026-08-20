@@ -17,6 +17,7 @@
 | pydantic | `~=2.13` | 2.13.4 | fastapi 数据校验 | 基线 |
 | pywinauto | `~=0.6.9` (win32) | 0.6.9 | WorkBuddy UIA 注入 | 缺失时节点仍可运行 |
 | comtypes | `~=1.4` (win32) | 1.4.16 | pywinauto 传递依赖 | COM 线程亲和关键 |
+| websockets | `~=15.0` (win32) | 15.0.1 | TraeWork CN CDP 注入 | 缺失时节点仍可运行 |
 
 > 安装：`python -m venv venv && venv\Scripts\python -m pip install -r requirements.txt`
 > 校验：`venv\Scripts\python -m pip list`

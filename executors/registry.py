@@ -27,6 +27,7 @@ from node import a2a
 RESULT_FILE_NAME = "result.md"
 POLL_INTERVAL = 1.0
 SIZE_STABLE_ROUNDS = 2  # 2.2.11: 大小连续 N 轮不变
+PRUNE_KEEP_SEC = 3600   # 已完结任务保留窗口后回收（防内存/磁盘无限增长）
 
 
 def _now_iso() -> str:
@@ -64,6 +65,7 @@ class TaskRecord:
         self.done_event = threading.Event()
         self.last_size = -1
         self.stable_count = 0
+        self.finished_at: float | None = None   # 完结时间点（回收窗口用）
 
     def as_dict(self) -> dict:
         task = a2a.make_task(self.task_id, self.agent_id, self.state)
@@ -112,8 +114,8 @@ class ExecutorRegistry:
         with self._lock:
             self.plugins.clear()
             self.entries.clear()
-            # 1) 内置 mock（测试桩，第五章 #4；node_config.json enable_mock=false 可关闭）
-            if getattr(self.node_core.config, "enable_mock", True):
+            # 1) 内置 mock（测试桩，第五章 #4；node_config.json enable_mock=true 显式开启）
+            if self.node_core.config.enable_mock:
                 self._add_plugin(MockPlugin, "mock", {})
             # 2) WorkBuddy GUI 适配器（导入失败 = 本机缺依赖，跳过）
             try:
@@ -129,6 +131,12 @@ class ExecutorRegistry:
                 self._add_plugin(CodeBuddyTuiPlugin, "codebuddy-tui", {})
             except Exception as e:
                 self.node_core.log("info", f"CodeBuddy 适配器不可用: {e}")
+            # 2.7) TraeWork CN GUI 适配器（CDP 注入/回收；缺 websockets 或未装则跳过）
+            try:
+                from .adapters.traework import TraeWorkPlugin
+                self._add_plugin(TraeWorkPlugin, "traework", {})
+            except Exception as e:
+                self.node_core.log("info", f"TraeWork 适配器不可用: {e}")
             # 3) 配置的 CLI 执行器条目
             for entry in self._config.get("cli_executors") or []:
                 agent_id = entry.get("agent_id")
@@ -358,6 +366,7 @@ class ExecutorRegistry:
 
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
+            self._prune_old_tasks()
             with self._lock:
                 working = [t for t in self.tasks.values() if t.state == a2a.TASK_WORKING]
             for record in working:
@@ -366,6 +375,26 @@ class ExecutorRegistry:
                 except Exception:
                     pass
             time.sleep(POLL_INTERVAL)
+
+    def _prune_old_tasks(self) -> None:
+        """回收已完结超窗任务：移除任务记录 + 注销结果文件 + 清理工作目录（2.2 内存/磁盘）。"""
+        import shutil
+        now = time.time()
+        with self._lock:
+            for tid, rec in list(self.tasks.items()):
+                if not rec.finished_at or (now - rec.finished_at) <= PRUNE_KEEP_SEC:
+                    continue
+                self.tasks.pop(tid, None)
+                try:
+                    plugin = self.plugins.get(rec.agent_id)
+                    if plugin:
+                        plugin.unregister_task(tid)
+                except Exception:
+                    pass
+                try:
+                    shutil.rmtree(rec.work_dir, ignore_errors=True)
+                except Exception:
+                    pass
 
     def _poll_one(self, record: TaskRecord) -> None:
         plugin = self.plugins.get(record.agent_id)
@@ -420,6 +449,7 @@ class ExecutorRegistry:
             record.error = error
             record.detail = detail
             record.state = a2a.TASK_COMPLETED if ok else a2a.TASK_FAILED
+            record.finished_at = time.time()
         record.done_event.set()
         # 通信日志（2.3.1）
         peer = record.caller_node_id or "local"

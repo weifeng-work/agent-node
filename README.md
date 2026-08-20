@@ -68,23 +68,25 @@ python -m node.main --data-dir data
       "args": ["-m", "mcp.server"],
       "cwd": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/app",
       "env": {
-        "AGENT_NODE_PANEL": "http://127.0.0.1:5177",
-        "AGENT_NODE_CALLER_ID": "my-ai-01"
+        "AGENT_NODE_PANEL": "http://127.0.0.1:5177"
       }
     }
   }
 }
 ```
 
-`AGENT_NODE_CALLER_ID` 是 AI 的身份，对应专属收件箱——异步任务的回执只进入
-该 ID 的邮箱，其他客户端不可见。内置 30+ 工具。
+> `AGENT_NODE_PANEL` 的 `5177` 是**默认**面板端口；若被占用节点会自动改用 5178…，
+> 实际地址以 `agent-node status` 或启动日志显示为准。
+
+caller_id（异步回执专属邮箱的身份键）**由系统自动派生**：MCP server 启动时读取父进程
+可执行名（如 workbuddy/trae），无需配置，同一台电脑上不同客户端互不冲突。内置 30+ 工具。
 
 ### 方式 B：CLI
 
 ```bash
 python -m tools.cli register        # 生成身份
 python -m tools.cli list            # 列出节点与执行器
-python -m tools.cli send "..." --node <node> --executor workbuddy
+python -m tools.cli task --target <node_id> --executor workbuddy --prompt "要 WorkBuddy 做的任务"
 ```
 
 ### 让任何 AI 自动驾驶本节点

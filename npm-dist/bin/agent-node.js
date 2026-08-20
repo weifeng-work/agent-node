@@ -25,6 +25,7 @@ const VENV_DIR = path.join(INSTALL_DIR, "venv");
 const PANEL_URL_FILE = path.join(DATA_DIR, "panel.url");
 const LOCK_FILE = path.join(DATA_DIR, "node.lock");
 const REPO_URL = "https://github.com/weifeng-work/agent-node";
+const DEFAULT_PANEL_PORT = 5177;  // 默认面板端口（与 server/panel.py DEFAULT_PANEL_PORT 一致）
 
 // ---------- 双语文案 / Bilingual messages ----------
 const T = {
@@ -116,8 +117,12 @@ function isRunning() {
 
 function getPanelUrl() {
   try {
+    // 面板实际端口由节点启动时决定（5177 被占自动 +1）并写入 data/panel.url
     return fs.readFileSync(PANEL_URL_FILE, "utf-8").trim();
-  } catch { return "http://127.0.0.1:5177"; }
+  } catch {
+    // panel.url 缺失（节点未启动）→ 以默认端口兜底
+    return `http://127.0.0.1:${DEFAULT_PANEL_PORT}`;
+  }
 }
 
 function openUrl(url) {
@@ -337,8 +342,7 @@ function showMcpGuide() {
   console.log(`        "args": ["-m", "mcp.server"],`);
   console.log(`        "cwd": "${appDir}",`);
   console.log('        "env": {');
-  console.log(`          "AGENT_NODE_PANEL": "${getPanelUrl()}",`);
-  console.log('          "AGENT_NODE_CALLER_ID": "my-ai-01"');
+  console.log(`          "AGENT_NODE_PANEL": "${getPanelUrl()}"`);
   console.log('        }');
   console.log('      }');
   console.log('    }');

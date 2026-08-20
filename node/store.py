@@ -183,7 +183,7 @@ class Store:
                 "sync_device_id=COALESCE(NULLIF(excluded.sync_device_id,''), "
                 "known_peers.sync_device_id), "
                 "host=COALESCE(NULLIF(excluded.host,''), known_peers.host), "
-                "peer_tcp_port=COALESCE(excluded.peer_tcp_port, known_peers.peer_tcp_port), "
+                "peer_tcp_port=COALESCE(NULLIF(excluded.peer_tcp_port,0), known_peers.peer_tcp_port), "
                 "last_seen=excluded.last_seen",
                 (node_id, name or "", team_id or "",
                  json.dumps(capabilities or [], ensure_ascii=False),
@@ -218,6 +218,12 @@ class Store:
     def delete_peer(self, node_id: str) -> None:
         with self._lock, self._db:
             self._db.execute("DELETE FROM known_peers WHERE node_id=?", (node_id,))
+
+    def delete_node_records(self, node_id: str) -> None:
+        """彻底删除死节点：known_peers + chat_messages（comm_log 审计保留，2.3）。"""
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM known_peers WHERE node_id=?", (node_id,))
+            self._db.execute("DELETE FROM chat_messages WHERE peer_node_id=?", (node_id,))
 
     # ---------- 聊天（2.8） ----------
     def add_chat(self, peer_node_id: str, direction: str, text: str,

@@ -109,6 +109,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 }
 #chat-left .conv:hover { background: var(--panel2); }
 #chat-left .conv.active { background: #22304a; border-color: #2f6fb0; }
+#chat-left .conv .conv-del { float: right; padding: 1px 8px; font-size: 11px; margin-top: -2px; }
+#chat-left .conv .conv-del:disabled { opacity: .4; cursor: not-allowed; }
 #chat-right { flex: 1; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
 #chat-msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .bubble { max-width: 72%; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
@@ -474,6 +476,15 @@ function esc(s) {
     c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
 
+/* ---------- 渲染优化：内容 diff 后才重写 DOM + 文本选中期间暂停刷新 ---------- */
+function setHtmlIfChanged(el, html) {
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
+let selectingText = false;
+let selectSince = 0;
+document.addEventListener("mousedown", () => { selectingText = true; selectSince = Date.now(); });
+document.addEventListener("mouseup", () => setTimeout(() => { selectingText = false; }, 150));
+
 /* ---------- 导航 ---------- */
 function switchView(v) {
   $$(".view").forEach(e => e.classList.remove("active"));
@@ -549,10 +560,16 @@ async function refreshNodes() {
     const r = await api("/api/nodes");
     state.nodes = r.nodes || [];
     const tb = $("#nodes-table tbody");
-    /* 按 tab 过滤: online=只在线的真节点; all=全部历史（含测试残留） */
-    const list = nodesTab === "all" ? state.nodes
-      : state.nodes.filter(n => n.online);
-    tb.innerHTML = list.map(n => `
+    /* 按 tab 过滤 + 名称稳定排序（名称相同再按 nodeId 兜底，保证全序稳定，3s 刷新不换位） */
+    const list = (nodesTab === "all" ? state.nodes
+      : state.nodes.filter(n => n.online))
+      .slice()
+      .sort((a, b) => {
+        const na = String(a.name || ""), nb = String(b.name || "");
+        if (na !== nb) return na.localeCompare(nb, "zh");
+        return String(a.nodeId || "").localeCompare(String(b.nodeId || ""));
+      });
+    const html = list.map(n => `
       <tr>
         <td><b>${esc(n.name)}</b></td>
         <td class="mono">${esc(n.nodeId)}</td>
@@ -563,8 +580,13 @@ async function refreshNodes() {
           `<span class="badge ${n.switches[k] ? "on" : "off"}" title="${k}">${k.replace("allow_","").slice(0,4)}</span>`).join(" ")}</td>
         <td class="mono">${esc(n.host || "")}:${esc(n.peerTcpPort || "")}</td>
         <td class="mono">${esc((n.lastSeen || "").replace("T", " ").slice(0, 19))}</td>
-        <td><button class="btn small danger" onclick="forgetNode('${esc(n.nodeId)}')">忘记</button></td>
+        <td>
+          <button class="btn small danger" onclick="forgetNode('${esc(n.nodeId)}')">忘记</button>
+          <button class="btn small danger" ${n.online ? "disabled title=\"在线节点不可删除\"" : ""}
+            onclick="purgeNode('${esc(n.nodeId)}')">删除</button>
+        </td>
       </tr>`).join("") || '<tr><td colspan="9" class="hint">暂未发现其他节点（等待 beacon，约 2~6 秒）</td></tr>';
+    setHtmlIfChanged(tb, html);
     const sel = $("#fb-node");
     const cur = sel.value;
     sel.innerHTML = `<option value="">本机</option>` + state.nodes
@@ -587,6 +609,14 @@ async function forgetNode(id) {
   if (!confirm("忘记该节点？（从已知列表移除，不影响对方）")) return;
   await api("/api/nodes/forget", { method: "POST", body: JSON.stringify({ node_id: id })});
   refreshNodes();
+}
+async function purgeNode(id) {
+  if (!confirm("彻底删除该节点？\n将清除其节点记录与聊天记录（审计日志保留）；在线节点不可删除。")) return;
+  const r = await api("/api/nodes/purge", { method: "POST", body: JSON.stringify({ node_id: id })});
+  if (r.ok) toast("已彻底删除"); else toast(r.detail || "删除失败", true);
+  refreshNodes();
+  if (state.currentChat === id) { state.currentChat = null; }
+  loadConversations();
 }
 async function addManualPeer() {
   const host = $("#mp-host").value.trim(), port = parseInt($("#mp-port").value) || 0;
@@ -626,11 +656,14 @@ async function loadConversations() {
   el.innerHTML = merged.map(c => {
     const n = state.nodes.find(x => x.nodeId === c.peer_node_id);
     const name = (n && n.name) || c.peer_node_id;
+    const online = !!(n && n.online);
     const badge = c.hasChat
       ? `<span class="hint">${c.msg_count} 条 · ${esc((c.last_ts||"").slice(5,16))}</span>`
-      : `<span class="hint">${n && n.online ? "在线" : "已知节点"} · 未开始聊天</span>`;
+      : `<span class="hint">${online ? "在线" : "已知节点"} · 未开始聊天</span>`;
     return `<div class="conv ${state.currentChat === c.peer_node_id ? "active" : ""}"
       onclick="openChat('${esc(c.peer_node_id)}')">
+      <button class="btn small danger conv-del" ${online ? "disabled title=\"在线节点不可删除\"" : ""}
+        onclick="event.stopPropagation(); purgeNode('${esc(c.peer_node_id)}')">删除</button>
       <b>${esc(name)}</b><br>${badge}</div>`;
   }).join("") || '<p class="hint">暂无节点</p>';
 }
@@ -939,6 +972,7 @@ async function refreshExecutors() {
         </td>
       </tr>`;
     }).join("") || '<tr><td colspan="8" class="hint">无执行器</td></tr>';
+    setHtmlIfChanged(tb, html);
   } catch (e) {}
 }
 async function queryExec(id) {
@@ -1078,6 +1112,10 @@ async function cleanupInbox(mode) {
 /* ---------- 轮询主循环（3s 局部数据轮询，2.1.6/4.4） ---------- */
 let pollCount = 0;
 async function pollLoop() {
+  if (selectingText) {
+    if (Date.now() - selectSince > 6000) selectingText = false;  // 防卡死兜底
+    else return;  // 文本选中期间暂停本轮刷新，避免选择被 DOM 重写清空
+  }
   refreshOverview();
   refreshNodes();
   refreshExecutors();

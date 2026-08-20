@@ -70,23 +70,27 @@ Add this JSON to your AI client (e.g. Claude Desktop):
       "args": ["-m", "mcp.server"],
       "cwd": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/app",
       "env": {
-        "AGENT_NODE_PANEL": "http://127.0.0.1:5177",
-        "AGENT_NODE_CALLER_ID": "my-ai-01"
+        "AGENT_NODE_PANEL": "http://127.0.0.1:5177"
       }
     }
   }
 }
 ```
 
-`AGENT_NODE_CALLER_ID` is the AI's identity and maps to a private inbox — async task
-receipts go only to that ID, invisible to other clients. 30+ tools built in.
+> `5177` in `AGENT_NODE_PANEL` is the **default** panel port; if occupied the node
+> automatically switches to 5178… — the actual address is shown by `agent-node status`.
+
+`caller_id` (the identity key for your private async-receipt inbox) is derived
+automatically: the MCP server reads its parent process executable name
+(e.g. workbuddy/trae) at startup — no config needed, distinct clients on the
+same machine never collide. 30+ tools built in.
 
 ### Method B: CLI
 
 ```bash
 python -m tools.cli register        # create identity
 python -m tools.cli list            # list nodes & executors
-python -m tools.cli send "..." --node <node> --executor workbuddy
+python -m tools.cli task --target <node_id> --executor workbuddy --prompt "a task for WorkBuddy"
 ```
 
 ### Have any AI drive this node

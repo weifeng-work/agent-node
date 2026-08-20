@@ -101,7 +101,12 @@ class WorkBuddyPlugin(ExecutorPlugin):
 
     @staticmethod
     def _workbuddy_installed() -> bool:
-        return Path(r"C:\Program Files\WorkBuddy\WorkBuddy.exe").is_file()
+        """WorkBuddy 可能装到系统目录或用户目录（Electron 常见 per-user），都探测（2.2.4 能力自检）。"""
+        candidates = [
+            Path(r"C:\Program Files\WorkBuddy\WorkBuddy.exe"),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "WorkBuddy" / "WorkBuddy.exe",
+        ]
+        return any(p.is_file() for p in candidates)
 
     # ---------- 任务提交 ----------
     def submit(self, task: TaskInput) -> SubmitResult:

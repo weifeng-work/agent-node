@@ -88,10 +88,13 @@ class BeaconService:
         self._threads: list[threading.Thread] = []
         self._send_sock: socket.socket | None = None
 
-    # ---- 去重（node_id + seq，2.1.5） ----
-    def _dedup(self, node_id: str, seq: int) -> bool:
+    # ---- 去重（node_id + 代次 + seq，2.1.5） ----
+    # gen（节点本次启动时间戳）参与键：节点重启后 seq 重新计数，用新 gen 隔离，
+    # 避免与重启前遗留 seq 窗口冲突而被误丢。
+    def _dedup(self, node_id: str, gen: int, seq: int) -> bool:
+        key = f"{node_id}@{gen}"
         with self._recent_lock:
-            dq = self._recent.setdefault(node_id, deque(maxlen=512))
+            dq = self._recent.setdefault(key, deque(maxlen=512))
             if seq in dq:
                 return False
             dq.append(seq)
@@ -142,7 +145,8 @@ class BeaconService:
             seq = payload.get("seq")
             if not node_id or seq is None or node_id == self.my_node_id:
                 continue  # 自身 beacon 丢弃
-            if not self._dedup(node_id, int(seq)):
+            gen = int(payload.get("gen") or 0)
+            if not self._dedup(node_id, gen, int(seq)):
                 continue
             try:
                 self.on_beacon(payload, addr)
@@ -185,6 +189,7 @@ def build_beacon_payload(node_core) -> dict:
     cfg = node_core.config
     return {
         "node_id": cfg.node_id,
+        "gen": int(node_core.started_at),   # 代次：节点本次启动时间戳（去重启歧义）
         "name": cfg.name,
         "team_id": cfg.team_id,
         "ips": _local_ips(),

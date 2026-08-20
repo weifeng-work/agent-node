@@ -170,7 +170,7 @@
 - `server/static/index.html`: 七视图 SPA（概览/节点/消息/文件/执行器/日志/设置）+
   顶部状态灯 + 3s 局部轮询 + 开关即切即生效 + 保存按钮语义 + 危险操作确认（2.9.9/第四章）
 - `mcp/server.py`: MCP stdio 薄桥（30 工具=2.5.9 ①~⑧；caller_id 环境变量/身份文件 2.6.3/2.6.4）
-- `tools/cli.py`: 语义化子命令（register/list/send/task/check/inbox/upload/download/ls/shell/sync/diag）
+- `tools/cli.py`: 语义化子命令（register/list/send/task/check/inbox/upload/download/ls/shell/node-update/sync/diag/executors）
 - `sync/syncthing.py`: Syncthing 子进程托管 + REST 控制 + 同 team beacon 自动互配 +
   data/sync/ 文件夹 + sync_now（2.4.7；纯局域网配置：关全局发现/中继）
 

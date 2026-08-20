@@ -46,6 +46,10 @@ def create_app(core) -> FastAPI:
     async def forget_node(body: dict):
         return core.forget_node(body.get("node_id") or "")
 
+    @app.post("/api/nodes/purge")
+    async def purge_node(body: dict):
+        return core.purge_node(body.get("node_id") or "")
+
     @app.post("/api/peers/add_manual")
     async def add_manual(body: dict):
         return core.add_manual_peer(body.get("host") or "",
@@ -187,8 +191,21 @@ def create_app(core) -> FastAPI:
             limit=limit)}
 
     @app.get("/api/logs/node")
-    def logs_node(lines: int = 200):
-        return {"ok": True, "log": core.node_log(lines)}
+    def logs_node(lines: int = 200, source: str = "", level: str = ""):
+        log = core.node_log(lines)
+        # source/level 过滤：level 匹配行内 [LEVEL] 标记；source 匹配行内关键字
+        src = str(source).strip().lower()
+        lv = str(level).strip().upper()
+        if src or lv:
+            filtered = []
+            for ln in log.splitlines():
+                if src and src not in ln.lower():
+                    continue
+                if lv and f"[{lv}]" not in ln.upper():
+                    continue
+                filtered.append(ln)
+            log = "\n".join(filtered)
+        return {"ok": True, "log": log}
 
     # ---------- 设置（2.9.9 / 2.14.3） ----------
     @app.get("/api/settings")
@@ -213,6 +230,12 @@ def create_app(core) -> FastAPI:
     @app.post("/api/settings/switch")
     async def set_switch(body: dict):
         return core.set_switch(body.get("switch") or "", bool(body.get("enabled")))
+
+    @app.post("/api/settings/admin")
+    async def set_admin(body: dict):
+        core.config.run_as_admin = bool(body.get("enabled"))
+        core.config.save()
+        return {"ok": True, "detail": "已写入配置，需重启节点生效"}
 
     @app.post("/api/settings/sync")
     async def set_sync(body: dict):

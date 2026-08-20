@@ -3,16 +3,19 @@
 - 由 AI 客户端以 stdio 子进程拉起；仅参数校验/语义组装/结果回传
 - 实际执行在节点核心进程（经面板 REST 127.0.0.1 回环转发）
 - caller_id = MCP server 进程身份（2.6.3/2.6.4）:
-    首选环境变量 AGENT_NODE_CALLER_ID；缺失时首启生成 UUID 写入
-    ~/.config/agent-node/caller.json 并复用
-- 工具面 = 2.5.9 ①~⑧（能力对等映射 2.5.7；语义化，不拼裸报文 2.5.8）
+    启动时读取父进程可执行名（workbuddy.exe/trae.exe…）归一化派生，
+    同一客户端同 id、不同客户端不同 id、本机不冲突；
+    父进程探测失败时退回每进程临时 UUID（绝不撞号）。
+    无需用户配置 AGENT_NODE_CALLER_ID。
+- 工具面 = get_skill(技能手册 + 深度文档按需读) + 2.5.9 ①~⑧（能力对等映射 2.5.7；语义化，不拼裸报文 2.5.8）
 
-用法（MCP 客户端 JSON 配置）:
+用法（MCP 客户端 JSON 配置，无需配置 caller_id）:
     {"command": "python", "args": ["-m", "mcp.server"],
-     "env": {"AGENT_NODE_CALLER_ID": "my-ai-1", "AGENT_NODE_PANEL": "http://127.0.0.1:5177"}}
+     "env": {"AGENT_NODE_PANEL": "http://127.0.0.1:5177"}}
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import sys
@@ -23,26 +26,93 @@ import uuid
 from pathlib import Path
 
 PANEL_BASE = os.environ.get("AGENT_NODE_PANEL", "http://127.0.0.1:5177")
-CALLER_ID_FILE = Path.home() / ".config" / "agent-node" / "caller.json"
 PROTOCOL_VERSION = "2024-11-05"
+
+# skill 手册与深度文档（随包分发；AI 按需读取，2.5.9 之外补充）
+ROOT_DIR = Path(__file__).resolve().parent.parent
+SKILL_FILE = ROOT_DIR / "skill" / "SKILL.md"
+DOCS_DIR = ROOT_DIR / "docs"
+
+
+def _parent_process_name() -> str | None:
+    """读取父进程可执行名（Windows 版，标准库 ctypes，无第三方依赖）。
+
+    由客户端以 stdio 子进程拉起 MCP server，父进程通常是该客户端
+    （workbuddy.exe / trae.exe / claude.exe…）。不支持平台/失败返回 None。
+    """
+    if os.name != "nt":
+        return None
+    try:
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", ctypes.c_ulong),
+                ("cntUsage", ctypes.c_ulong),
+                ("th32ProcessID", ctypes.c_ulong),
+                ("th32DefaultHeapID", ctypes.c_ulong),
+                ("th32ModuleID", ctypes.c_ulong),
+                ("cntThreads", ctypes.c_ulong),
+                ("th32ParentProcessID", ctypes.c_ulong),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", ctypes.c_ulong),
+                ("szExeFile", ctypes.c_wchar * 260),
+            ]
+        TH32CS_SNAPPROCESS = 0x00000002
+        INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+        kernel32 = ctypes.windll.kernel32
+        me = os.getpid()
+        snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap == INVALID_HANDLE_VALUE:
+            return None
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        try:
+            if not kernel32.Process32FirstW(snap, ctypes.byref(entry)):
+                return None
+            parent_pid = None
+            while True:
+                if entry.th32ProcessID == me:
+                    parent_pid = int(entry.th32ParentProcessID)
+                    break
+                if not kernel32.Process32NextW(snap, ctypes.byref(entry)):
+                    break
+            if parent_pid is None:
+                return None
+            # 重新遍历找父进程的可执行名
+            if not kernel32.Process32FirstW(snap, ctypes.byref(entry)):
+                return None
+            while True:
+                if entry.th32ProcessID == parent_pid:
+                    return entry.szExeFile.split("\x00", 1)[0]
+                if not kernel32.Process32NextW(snap, ctypes.byref(entry)):
+                    break
+            return None
+        finally:
+            kernel32.CloseHandle(snap)
+    except Exception:
+        return None
+
+
+_CALLER_ID: str | None = None  # 进程级缓存：整个 MCP 进程生命周期内身份不变
+
+
+def _derive_caller_id() -> str:
+    """caller_id = 父进程可执行名派生；失败退回每进程临时 UUID（绝不撞号）。"""
+    name = _parent_process_name()
+    if name:
+        base = name.lower()
+        if base.endswith(".exe"):
+            base = base[:-4]
+        if base and base not in ("python", "pythonw", "cmd", "powershell"):
+            return base
+    return f"mcp-{uuid.uuid4()}"
 
 
 def get_caller_id() -> str:
-    env = os.environ.get("AGENT_NODE_CALLER_ID")
-    if env:
-        return env
-    try:
-        if CALLER_ID_FILE.exists():
-            data = json.loads(CALLER_ID_FILE.read_text(encoding="utf-8"))
-            if data.get("caller_id"):
-                return data["caller_id"]
-        CALLER_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
-        cid = str(uuid.uuid4())
-        CALLER_ID_FILE.write_text(json.dumps({"caller_id": cid}, ensure_ascii=False),
-                                  encoding="utf-8")
-        return cid
-    except Exception:
-        return str(uuid.uuid4())
+    """返回本 MCP 进程的 caller_id（首次派生后缓存复用）。"""
+    global _CALLER_ID
+    if _CALLER_ID is None:
+        _CALLER_ID = _derive_caller_id()
+    return _CALLER_ID
 
 
 def panel_call(method: str, path: str, body: dict | None = None,
@@ -73,13 +143,19 @@ def _s(props: dict, required: list[str] | None = None) -> dict:
 
 
 TOOLS = [
+    # 0) 技能手册（先于 2.5.9 ①~⑧）
+    {"name": "get_skill", "description": "读取 agent-node 唯一官方协作手册 SKILL.md 全文（接入/身份/工作流/能力清单）并附深度文档索引；doc 可选填深度文档名（如 协议与架构 / 重构设计方案）按需读取。首次使用本节点请先调用本工具。",
+     "inputSchema": _s({"doc": {"type": "string",
+                                "description": "可选：深度文档名，如 协议与架构 / 重构设计方案"}})},
     # ① 本机状态
     {"name": "get_node_info", "description": "本机节点概览: node_id/名称/team/IP/端口/面板/三开关/在线状态",
      "inputSchema": _s({})},
     # ② 节点
     {"name": "list_nodes", "description": "已知节点列表（含离线不消失: node_id+名称+team+能力+在线状态+last_seen）",
      "inputSchema": _s({})},
-    {"name": "forget_node", "description": "忘记节点（从已知列表移除）",
+    {"name": "forget_node", "description": "忘记节点（从已知列表移除，保留聊天记录）",
+     "inputSchema": _s({"node_id": {"type": "string"}}, ["node_id"])},
+    {"name": "purge_node", "description": "彻底删除死节点（节点记录+聊天记录，审计日志保留；在线节点拒绝）",
      "inputSchema": _s({"node_id": {"type": "string"}}, ["node_id"])},
     {"name": "add_manual_peer", "description": "手动指定节点加入（跨网段兜底，被加方需固定 peer_tcp_port）",
      "inputSchema": _s({"host": {"type": "string"}, "peer_tcp_port": {"type": "integer"}},
@@ -124,7 +200,7 @@ TOOLS = [
                        ["executor_id", "prompt"])},
     {"name": "get_task_result", "description": "查询任务结果（含未完成的进行中状态）",
      "inputSchema": _s({"task_id": {"type": "string"}}, ["task_id"])},
-    {"name": "check_inbox", "description": "取异步邮箱回执（caller_id 自动注入，只返回自己的）",
+    {"name": "check_inbox", "description": "取异步邮箱回执（caller_id 按父进程名自动派生，只返回自己的）",
      "inputSchema": _s({})},
     {"name": "get_executor_status", "description": "读执行器深态（本机直接/远程深查，受 allow_ai_task）",
      "inputSchema": _s({"executor_id": {"type": "string"}}, ["executor_id"])},
@@ -171,12 +247,16 @@ TOOLS = [
 
 def dispatch_tool(name: str, args: dict) -> str:
     a = args or {}
-    if name == "get_node_info":
+    if name == "get_skill":
+        r = _get_skill(a.get("doc"))
+    elif name == "get_node_info":
         r = panel_call("GET", "/api/overview")
     elif name == "list_nodes":
         r = panel_call("GET", "/api/nodes")
     elif name == "forget_node":
         r = panel_call("POST", "/api/nodes/forget", {"node_id": a["node_id"]})
+    elif name == "purge_node":
+        r = panel_call("POST", "/api/nodes/purge", {"node_id": a["node_id"]})
     elif name == "add_manual_peer":
         r = panel_call("POST", "/api/peers/add_manual",
                        {"host": a["host"], "peer_tcp_port": a["peer_tcp_port"]})
@@ -243,7 +323,10 @@ def dispatch_tool(name: str, args: dict) -> str:
              f"&limit={a.get('limit') or 200}")
         r = panel_call("GET", "/api/logs/comm" + q)
     elif name == "get_node_log":
-        r = panel_call("GET", f"/api/logs/node?lines={a.get('lines') or 200}")
+        r = panel_call(
+            "GET", f"/api/logs/node?lines={a.get('lines') or 200}"
+                   f"&source={urllib.parse.quote(a.get('source') or '')}"
+                   f"&level={urllib.parse.quote(a.get('level') or '')}")
     elif name == "get_config":
         r = panel_call("GET", "/api/settings")
     elif name == "rename_node":
@@ -257,8 +340,8 @@ def dispatch_tool(name: str, args: dict) -> str:
         r = panel_call("POST", "/api/settings/switch",
                        {"switch": a["switch"], "enabled": a["enabled"]})
     elif name == "set_run_as_admin":
-        r = panel_call("GET", "/api/settings")  # admin 经配置文件（文档约束）
-        r = {"ok": True, "detail": "run_as_admin 请人工修改 node_config.json 后重启（2.14.6）"}
+        r = panel_call("POST", "/api/settings/admin",
+                       {"enabled": a.get("enabled") is True})
     elif name == "cleanup_inbox":
         r = panel_call("POST", "/api/inbox/cleanup", {"mode": a["mode"],
                                                       "before": a.get("before")})
@@ -275,6 +358,30 @@ def dispatch_tool(name: str, args: dict) -> str:
 def _file_pull(a):
     return panel_call("POST", "/api/files/pull",
                       {"node_id": a.get("node_id") or None, "path": a["path"]})
+
+
+def _get_skill(doc: str = "") -> dict:
+    """get_skill：默认返回 SKILL.md 全文 + 深度文档索引；doc 指定时返回对应深度文档。"""
+    if doc:
+        want = doc.strip().lower().replace(" ", "")
+        for f in sorted(DOCS_DIR.glob("*.md")):
+            if want in f.stem.lower().replace(" ", ""):
+                return {"ok": True, "doc": f.stem,
+                        "content": f.read_text(encoding="utf-8")}
+        avail = "、".join(f.stem for f in sorted(DOCS_DIR.glob("*.md")))
+        return {"ok": False, "error": "agent_error",
+                "detail": f"未找到深度文档: {doc}（可用: {avail}）"}
+    skill = SKILL_FILE.read_text(encoding="utf-8") if SKILL_FILE.exists() else ""
+    index = []
+    for f in sorted(DOCS_DIR.glob("*.md")):
+        first = ""
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            first = line.strip()
+            if first:
+                break
+        index.append({"doc": f.stem, "path": f"docs/{f.name}", "summary": first[:60]})
+    return {"ok": True, "skill": skill, "deep_docs": index,
+            "hint": "日常操作只需本 skill 全文；深度架构/协议文档请用 get_skill(doc=<文档名>) 按需读取"}
 
 
 # ================= MCP stdio JSON-RPC 主循环 =================
@@ -317,6 +424,12 @@ def handle_message(msg: dict) -> dict | None:
 
 
 def main() -> int:
+    # stdio 管道固定 UTF-8：避免中文 Windows 下按 GBK 读写导致 JSON 中文乱码
+    for _s in (sys.stdin, sys.stdout):
+        try:
+            _s.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
     # MCP stdio: 每行一个 JSON-RPC 消息
     for line in sys.stdin:
         line = line.strip()

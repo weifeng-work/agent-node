@@ -65,13 +65,16 @@ Add to your AI client (e.g. Claude Desktop) `claude_desktop_config.json`:
       "args": ["-m", "mcp.server"],
       "cwd": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/app",
       "env": {
-        "AGENT_NODE_PANEL": "http://127.0.0.1:5177",
-        "AGENT_NODE_CALLER_ID": "my-ai-01"
+        "AGENT_NODE_PANEL": "http://127.0.0.1:5177"
       }
     }
   }
 }
 ```
+
+> `AGENT_NODE_PANEL` 的 `5177` 是默认面板端口；若被占用节点会自动改用 5178…，实际地址以 `agent-node status` 为准。
+
+caller_id（异步回执专属邮箱的身份键）由系统自动派生（父进程可执行名），无需配置。
 
 ## Prerequisites / 前提条件
 

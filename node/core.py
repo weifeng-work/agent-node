@@ -33,10 +33,11 @@ from transport.beacon import BeaconService, build_beacon_payload
 from transport.mesh import MeshManager
 
 BEACON_ONLINE_SEC = 6.0     # 2.1.6 默认时序参数
-PROBE_INTERVAL = 1.0
 PROBE_FAILS = 3
 MAX_LIST_ENTRIES = 5000
 SHELL_DEFAULT_TIMEOUT = 60
+ASYNC_RETRY_TTL = 600   # 2.6 异步回执重试窗口（秒）
+REMOTE_CACHE_TTL = 3600  # 远端结果/任务/异步挂起缓存回收窗口（对齐 registry 1h）
 
 
 def _pid_alive(pid: int) -> bool:
@@ -94,6 +95,9 @@ class NodeCore:
         self._async_pending: dict[str, dict] = {}   # task_id -> {callerId, agentId, nodeId}
         self._remote_results: dict[str, dict] = {}  # 远端推送结果缓存（sync 模式加速）
         self._remote_tasks: dict[str, str] = {}     # task_id -> 远端 node_id
+        self._remote_results_ts: dict[str, float] = {}   # 上述缓存的登记时间戳（TTL 回收）
+        self._remote_tasks_ts: dict[str, float] = {}
+        self._async_pending_ts: dict[str, float] = {}
         self._async_retry: list[tuple[str, float]] = []
         self._dedup_msgs: dict[str, deque] = {}     # sender -> 近期 msg_id（2.13.4）
         self._stopping = False
@@ -157,6 +161,7 @@ class NodeCore:
         """周期心跳摘要日志（每 5 分钟；无事件时也能从 node.log 看到连接存活，
         回应用户「应有心跳记录」的观察——ping/pong 本身不落日志以免刷屏）。"""
         while not self._stopping:
+            self._prune_remote_caches()
             try:
                 with self.mesh._conn_lock:
                     conns = [pid for pid, c in self.mesh.connections.items()
@@ -373,7 +378,6 @@ class NodeCore:
                         self._online[node_id] = ok or fails < PROBE_FAILS
                         if was and not self._online[node_id]:
                             self.log("info", f"节点判定离线: {node_id}（连续 {PROBE_FAILS} 次探测失败）")
-                    time.sleep(PROBE_INTERVAL)
             except Exception:
                 traceback.print_exc()
             time.sleep(2)
@@ -387,7 +391,7 @@ class NodeCore:
                     if host and port:
                         # 未知 node_id，直接按地址连接（握手后注册）
                         if not any(
-                                (c.addr and c.addr[0] == host) or False
+                                c.addr and c.addr[0] == host
                                 for c in list(self.mesh.connections.values())):
                             self.mesh.connect(host, port)
             except Exception:
@@ -554,6 +558,13 @@ class NodeCore:
                                 pl.get("sha256") or "", correlation_id=env.get("msg_id"),
                                 reply_conn=conn)
             self.mesh.register_receiver(ftid, recv)
+            # R3 超时兜底：对端停止发块且连接不断开时，强制失败并清理（防接收器常驻）
+            def _receive_watchdog():
+                wait = max(30.0, size / (200 * 1024) + 30)
+                if not recv.done.wait(wait):
+                    recv._finish(False, "receive timeout")
+            threading.Thread(target=_receive_watchdog, daemon=True,
+                             name="file-recv-watch").start()
             conn.send_env(P.make_envelope(
                 P.T_FILE_ACK, self.node_id, sender,
                 {"accepted": True}, correlation_id=env.get("msg_id")))
@@ -758,7 +769,11 @@ class NodeCore:
             task = result.get("task") or {}
             with self._lock:
                 self._remote_results[task_id] = task
+                self._remote_results_ts[task_id] = time.time()
                 pending = self._async_pending.pop(task_id, None)
+            if pending:
+                with self._lock:
+                    self._async_pending_ts.pop(task_id, None)
             if pending:
                 content = self._extract_task_content(task)
                 self.store.add_inbox(
@@ -839,6 +854,18 @@ class NodeCore:
     def forget_node(self, node_id: str) -> bool:
         self.store.delete_peer(node_id)
         return True
+
+    def purge_node(self, node_id: str) -> dict:
+        """彻底删除死节点（known_peers + 聊天记录；comm_log 审计保留 2.3）。
+        在线节点拒绝删除——服务端强制校验，防止绕过前端。"""
+        if not node_id:
+            return {"ok": False, "error": "agent_error", "detail": "缺少 node_id"}
+        if self.is_peer_online(node_id):
+            return {"ok": False, "error": "agent_error",
+                    "detail": "节点在线，不可删除（离线后再操作）"}
+        self.store.delete_node_records(node_id)
+        self.log("info", f"彻底删除节点记录: {node_id}")
+        return {"ok": True, "detail": "已删除节点记录与聊天记录（审计日志保留）"}
 
     # ---------- 聊天 ----------
     def send_chat(self, target_node_id: str, text: str,
@@ -1082,6 +1109,7 @@ class NodeCore:
             return {"ok": False, "error": err, "detail": detail, "taskId": task_id}
         with self._lock:
             self._remote_tasks[task_id] = node_id
+            self._remote_tasks_ts[task_id] = time.time()
         self.store.add_comm_log("outbound", node_id, "task_submit", task_id, "ok",
                                 f"executor={agent_id} mode={mode}")
         result = {"ok": True, "taskId": task_id, "mode": mode, "local": False}
@@ -1092,6 +1120,7 @@ class NodeCore:
             with self._lock:
                 self._async_pending[task_id] = {"callerId": caller_id,
                                                 "agentId": agent_id, "nodeId": node_id}
+                self._async_pending_ts[task_id] = time.time()
             return result
         # sync: 轮询 tasks/get（或等远端推送缓存）
         info = self._wait_remote_task(node_id, task_id, timeout)
@@ -1180,24 +1209,52 @@ class NodeCore:
                    "result": {"kind": "task_result", "task": record.as_dict()}}
         env = P.make_envelope(P.T_A2A_RESPONSE, self.node_id, record.caller_node_id,
                               payload, correlation_id=record.task_id)
-        if not self.mesh.send_to(record.caller_node_id, env):
+        if self.mesh.send_to(record.caller_node_id, env):
+            # 推送成功：从重试队列移除，避免无谓重发
             with self._lock:
-                self._async_retry.append((record.task_id, time.time() + 600))
-            self.log("warning", f"异步回执推送失败（入重试队列）: {record.task_id[:8]}")
+                self._async_retry = [(t, e) for t, e in self._async_retry
+                                     if t != record.task_id]
+            return
+        with self._lock:
+            # 仅在首次失败时登记，沿用既有的绝对 deadline（不回拨），
+            # 从而让 10 分钟重试窗口真正生效
+            if not any(t == record.task_id for t, _ in self._async_retry):
+                self._async_retry.append(
+                    (record.task_id, time.time() + ASYNC_RETRY_TTL))
+        self.log("warning", f"异步回执推送失败（入重试队列）: {record.task_id[:8]}")
 
     def _async_retry_loop(self) -> None:
-        """每 20s 重试推送失败的异步回执，直至 deadline（10 分钟）。"""
+        """每 20s 重试推送失败的异步回执，直至各自 deadline（默认 10 分钟）。"""
         while not self._stopping:
             time.sleep(20)
+            now = time.time()
             with self._lock:
-                now = time.time()
-                due = [tid for tid, exp in self._async_retry if now < exp]
-                self._async_retry = [(t, e) for t, e in self._async_retry
-                                     if now < e and t not in due]
-            for task_id in due:
+                items = [(t, e) for t, e in self._async_retry if e > now]
+                self._async_retry = items
+            for task_id, _exp in items:
                 rec = self.registry.tasks.get(task_id)
                 if rec and rec.caller_node_id:
                     self.push_async_result(rec)
+
+    def _prune_remote_caches(self) -> None:
+        """回收远端结果/任务/异步挂起缓存（TTL 窗口，防无限增长）。"""
+        cutoff = time.time() - REMOTE_CACHE_TTL
+        with self._lock:
+            for tid, ts in list(self._remote_results_ts.items()):
+                if ts > cutoff:
+                    continue
+                self._remote_results_ts.pop(tid, None)
+                self._remote_results.pop(tid, None)
+            for tid, ts in list(self._remote_tasks_ts.items()):
+                if ts > cutoff:
+                    continue
+                self._remote_tasks_ts.pop(tid, None)
+                self._remote_tasks.pop(tid, None)
+            for tid, ts in list(self._async_pending_ts.items()):
+                if ts > cutoff:
+                    continue
+                self._async_pending_ts.pop(tid, None)
+                self._async_pending.pop(tid, None)
 
     # ---------- inbox ----------
     def check_inbox(self, caller_id: str) -> list[dict]:
