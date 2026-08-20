@@ -243,6 +243,60 @@ def create_app(core) -> FastAPI:
     def sync_now():
         return core.sync_now()
 
+    @app.get("/api/sync/status")
+    def sync_status():
+        """每个已配对节点的同步完成度（人类确认"同步到位"的反馈，2.4.7）。"""
+        if not core.sync:
+            return {"ok": False, "error": "not_installed", "devices": []}
+        return core.sync.status()
+
+    @app.post("/api/sync/add")
+    async def sync_add(request: Request):
+        """把本机选择的文件加入同步目录 data/sync（文件选择器 → 浏览器原始字节）。"""
+        name = request.headers.get("X-File-Name") or "sync_add.bin"
+        import urllib.parse
+        name = urllib.parse.unquote(name)
+        if any(ord(c) < 0x20 for c in name):
+            return {"ok": False, "error": "agent_error", "detail": "文件名含非法字符"}
+        data = await request.body()
+        if not data:
+            return {"ok": False, "error": "agent_error", "detail": "空文件"}
+        rel = request.query_params.get("rel") or name
+        rel = urllib.parse.unquote(rel).replace("\\", "/").strip("/")
+        dest = core.data_dir / "sync" / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        if core.sync:
+            core.sync.sync_now()
+        return {"ok": True, "detail": f"已加入同步目录: {dest}"}
+
+    # ---------- 收件目录 ----------
+    @app.get("/api/files/inbox")
+    def files_inbox():
+        """统一收件目录内容 + 收件历史（来自哪个节点，2.4.2/4.2 文件视图）。"""
+        import time as _time
+        inbox = core.config.inbox_dir()
+        entries = []
+        if inbox.is_dir():
+            for it in sorted(inbox.iterdir(),
+                             key=lambda x: x.stat().st_mtime if x.exists() else 0,
+                             reverse=True):
+                try:
+                    st = it.stat()
+                    entries.append({"name": it.name, "path": str(it),
+                                    "isDir": it.is_dir(),
+                                    "size": 0 if it.is_dir() else st.st_size,
+                                    "mtime": int(st.st_mtime)})
+                except OSError:
+                    pass
+        # 收件历史: inbound file_push 通信日志（含来源节点）
+        history = []
+        for e in core.comm_log(msg_type="file_push", direction="inbound",
+                               limit=100):
+            history.append({"ts": e.get("ts"), "peer": e.get("peer_node_id"),
+                            "detail": (e.get("detail") or "")[:200]})
+        return {"ok": True, "entries": entries, "history": history[:50]}
+
     # ---------- 诊断（2.17.7） ----------
     @app.get("/api/diag")
     def diag():

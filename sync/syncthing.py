@@ -194,3 +194,33 @@ class SyncManager:
             return {"ok": True, "detail": f"已触发 {self.sync_dir} 扫描同步"}
         except Exception as e:
             return {"ok": False, "error": "agent_error", "detail": str(e)}
+
+    def status(self) -> dict:
+        """每个已配对设备的同步完成度（人类确认同步到位，2.4.7）。
+
+        completion: 0-100（100 = 该节点已完全同步本节点数据）。"""
+        devices = []
+        try:
+            configured = self._rest("GET", "/rest/config/devices")
+            for d in configured:
+                did = d.get("deviceID", "")
+                if did == self.device_id or not did:
+                    continue
+                entry = {"deviceId": did[:16] + "...", "name": d.get("name") or did[:8],
+                         "completion": None, "state": "unknown"}
+                try:
+                    comp = self._rest(
+                        "GET",
+                        f"/rest/db/completion?device={did}&folder={FOLDER_ID}")
+                    entry["completion"] = comp.get("completion")
+                    if comp.get("completion") == 100:
+                        entry["state"] = "synced"
+                    elif comp.get("completion") is not None:
+                        entry["state"] = "syncing"
+                except Exception:
+                    pass
+                devices.append(entry)
+        except Exception as e:
+            return {"ok": False, "error": "agent_error",
+                    "detail": str(e), "devices": []}
+        return {"ok": True, "folder": str(self.sync_dir), "devices": devices}

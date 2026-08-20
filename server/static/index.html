@@ -146,6 +146,15 @@ pre.logbox {
 textarea#task-prompt { min-height: 110px; resize: vertical; }
 select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
 .full { width: 100% !important; }
+.subtabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
+.subtabs a { padding: 8px 16px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.subtabs a:hover { color: var(--text); }
+.subtabs a.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.bubble .who { font-size: 11px; color: var(--accent); margin-bottom: 3px; }
+.bubble.in .who { color: var(--purple); }
+.sync-dev { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.sync-bar { flex: 1; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+.sync-bar > div { height: 100%; background: var(--green); transition: width .5s; }
 </style>
 </head>
 <body>
@@ -230,36 +239,115 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
 </div>
 
 <div class="view" id="view-files">
-  <h2>文件浏览器</h2>
-  <div id="file-layout">
-    <div class="card" id="file-browser">
-      <div class="row">
-        <select id="fb-node" onchange="fbNodeChanged()"></select>
-        <button class="btn small" onclick="fbGoRoot()">根目录</button>
-        <button class="btn small" onclick="fbUp()">上一级</button>
+  <h2>文件</h2>
+  <div class="subtabs">
+    <a data-ftab="browser" class="active">文件浏览器</a>
+    <a data-ftab="push">推送文件</a>
+    <a data-ftab="inbox">收件目录</a>
+    <a data-ftab="sync">同步目录</a>
+  </div>
+
+  <!-- Tab 1: 浏览器 -->
+  <div class="ftab" id="ftab-browser">
+    <div id="file-layout">
+      <div class="card" id="file-browser">
+        <div class="row">
+          <select id="fb-node" onchange="fbNodeChanged()"></select>
+          <button class="btn small" onclick="fbGoRoot()">根目录</button>
+          <button class="btn small" onclick="fbUp()">上一级</button>
+        </div>
+        <div class="crumbs" id="fb-crumbs"></div>
+        <div style="max-height:52vh; overflow-y:auto">
+          <table id="fb-table"><thead><tr>
+            <th>名称</th><th>类型</th><th>大小</th><th>操作</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
       </div>
-      <div class="crumbs" id="fb-crumbs"></div>
-      <div style="max-height:56vh; overflow-y:auto">
-        <table id="fb-table"><thead><tr>
-          <th>名称</th><th>类型</th><th>大小</th><th>操作</th>
+      <div id="file-side">
+        <div class="card">
+          <h3>快捷目录（本机）</h3>
+          <p><a class="flink" data-nav="inbox">收件目录 data/inbox/</a></p>
+          <p><a class="flink" data-nav="sync">同步目录 data/sync/</a></p>
+        </div>
+        <div class="card">
+          <h3>推送到当前浏览目录</h3>
+          <p class="hint" id="push-target-hint">目标: …</p>
+          <div class="row">
+            <label class="btn primary" style="cursor:pointer">选择文件…<input type="file" id="push-files" multiple style="display:none"></label>
+            <label class="btn" style="cursor:pointer">选择文件夹…<input type="file" id="push-dir" webkitdirectory style="display:none"></label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 2: 推送 -->
+  <div class="ftab" id="ftab-push" style="display:none">
+    <div class="card">
+      <h3>推送文件/文件夹到节点</h3>
+      <div class="row">
+        <label>目标节点</label>
+        <select id="push-tab-node"></select>
+      </div>
+      <div class="row">
+        <label>目标目录</label>
+        <input type="text" id="push-tab-dir" placeholder="留空 = 对方统一收件目录 data/inbox/" style="flex:1;min-width:300px">
+      </div>
+      <div class="row">
+        <label class="btn primary" style="cursor:pointer">选择文件…<input type="file" id="push-tab-files" multiple style="display:none"></label>
+        <label class="btn" style="cursor:pointer">选择文件夹…<input type="file" id="push-tab-dir-input" webkitdirectory style="display:none"></label>
+      </div>
+      <p class="hint">文件与文件夹分开选择（前者单/多文件，后者整树保留结构、不经打包）。</p>
+    </div>
+    <div class="card">
+      <h3>发送历史</h3>
+      <div style="max-height:34vh; overflow-y:auto">
+        <table id="push-history-table"><thead><tr>
+          <th>时间</th><th>方向</th><th>对端</th><th>详情</th>
         </tr></thead><tbody></tbody></table>
       </div>
     </div>
-    <div id="file-side">
-      <div class="card">
-        <h3>快捷目录（本机）</h3>
-        <p><a class="flink" data-nav="inbox">收件目录 data/inbox/</a></p>
-        <p><a class="flink" data-nav="sync">同步目录 data/sync/</a></p>
+  </div>
+
+  <!-- Tab 3: 收件目录 -->
+  <div class="ftab" id="ftab-inbox" style="display:none">
+    <div class="card">
+      <h3>本机统一收件目录 data/inbox/</h3>
+      <div style="max-height:34vh; overflow-y:auto">
+        <table id="inbox-table"><thead><tr>
+          <th>文件名</th><th>大小</th><th>时间</th>
+        </tr></thead><tbody></tbody></table>
       </div>
-      <div class="card">
-        <h3>推送到当前浏览目录</h3>
-        <p class="hint" id="push-target-hint">目标: …</p>
-        <div class="row">
-          <label class="btn primary" style="cursor:pointer">选择文件…<input type="file" id="push-files" multiple style="display:none"></label>
-          <label class="btn" style="cursor:pointer">选择文件夹…<input type="file" id="push-dir" webkitdirectory style="display:none"></label>
-        </div>
-        <p class="hint">在根目录时推送到对方统一收件目录 data/inbox/（2.4.2）。文件夹推送保留目录结构（不经打包）。</p>
+    </div>
+    <div class="card">
+      <h3>收件历史（来自哪个节点）</h3>
+      <div style="max-height:30vh; overflow-y:auto">
+        <table id="inbox-history-table"><thead><tr>
+          <th>时间</th><th>来源节点</th><th>文件</th>
+        </tr></thead><tbody></tbody></table>
       </div>
+    </div>
+  </div>
+
+  <!-- Tab 4: 同步目录 -->
+  <div class="ftab" id="ftab-sync" style="display:none">
+    <div class="card">
+      <h3>同步目录 data/sync/（Syncthing 对等同步）</h3>
+      <div class="row">
+        <button class="btn primary" onclick="syncNow()">确认同步（手动触发扫描）</button>
+        <label class="btn" style="cursor:pointer">加入同步目录…<input type="file" id="sync-add-input" multiple style="display:none"></label>
+        <span class="hint">文件放入 data/sync/ 会由 fsWatcher 自动触发同步；此按钮为手动确认兜底。</span>
+      </div>
+      <div style="max-height:26vh; overflow-y:auto">
+        <table id="sync-table"><thead><tr>
+          <th>文件名</th><th>大小</th><th>时间</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>各节点同步完成度</h3>
+      <div id="sync-devs"><p class="hint">加载中…</p></div>
+      <p class="hint">completion 100% = 该节点已确认同步到位；低于 100% 或 unknown 请到该电脑检查（节点离线/Syncthing 未运行）。</p>
     </div>
   </div>
 </div>
@@ -509,9 +597,13 @@ async function openChat(peerId) {
   loadConversations();
   const r = await api("/api/chat/history?peer=" + encodeURIComponent(peerId) + "&limit=500");
   const box = $("#chat-msgs");
+  const peerName = ((state.nodes.find(n => n.nodeId === peerId) || {}).name) || peerId;
+  const myName = (state.overview || {}).name || "本机";
   box.innerHTML = (r.messages || []).map(m => {
     const mine = m.direction === "out";
-    return `<div class="bubble ${mine ? "out" : "in"}">${esc(m.text)}
+    return `<div class="bubble ${mine ? "out" : "in"}">
+      <div class="who">${mine ? esc(myName) + "（本机）" : esc(peerName)}</div>
+      ${esc(m.text)}
       <div class="meta">${esc((m.ts||"").slice(11,19))}</div></div>`;
   }).join("") || '<p class="hint" style="margin:auto">暂无消息</p>';
   box.scrollTop = box.scrollHeight;
@@ -526,8 +618,145 @@ async function sendChat() {
   if (r.ok) { input.value = ""; openChat(state.currentChat); }
   else toast(r.detail || "发送失败", true);
 }
+async function refreshChatQuiet() {
+  /* 静默刷新: 只在消息数变化时重绘（不打断输入焦点/滚动位置） */
+  try {
+    const box = $("#chat-msgs");
+    const r = await api("/api/chat/history?peer=" +
+                        encodeURIComponent(state.currentChat) + "&limit=500");
+    const count = (r.messages || []).length;
+    if (count !== (state._chatCount || 0)) {
+      state._chatCount = count;
+      const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+      const peerName = ((state.nodes.find(
+        n => n.nodeId === state.currentChat) || {}).name) || state.currentChat;
+      const myName = (state.overview || {}).name || "本机";
+      box.innerHTML = (r.messages || []).map(m => {
+        const mine = m.direction === "out";
+        return `<div class="bubble ${mine ? "out" : "in"}">
+          <div class="who">${mine ? esc(myName) + "（本机）" : esc(peerName)}</div>
+          ${esc(m.text)}
+          <div class="meta">${esc((m.ts||"").slice(11,19))}</div></div>`;
+      }).join("") || "";
+      if (nearBottom) box.scrollTop = box.scrollHeight;
+    }
+  } catch (e) { /* 下轮重试 */ }
+}
 $("#chat-input").addEventListener("keydown", e => {
   if (e.key === "Enter") sendChat();
+});
+
+/* ---------- 文件四子页签 ---------- */
+function switchFTab(tab) {
+  $$(".ftab").forEach(e => e.style.display = "none");
+  $("#ftab-" + tab).style.display = "block";
+  $$(".subtabs a").forEach(a => a.classList.toggle("active", a.dataset.ftab === tab));
+  if (tab === "push") loadPushTab();
+  if (tab === "inbox") loadInboxTab();
+  if (tab === "sync") loadSyncTab();
+}
+$$(".subtabs a").forEach(a => a.onclick = () => switchFTab(a.dataset.ftab));
+
+async function loadPushTab() {
+  // 目标节点下拉（在线节点 + 本机）
+  const sel = $("#push-tab-node");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">本机</option>` + state.nodes
+    .filter(n => n.online).map(n =>
+      `<option value="${esc(n.nodeId)}">${esc(n.name)}</option>`).join("");
+  if (cur) sel.value = cur;
+  // 发送历史（双向 file_push 日志）
+  const r = await api("/api/logs/comm?type=file_push&limit=50");
+  $("#push-history-table tbody").innerHTML = (r.entries || []).map(e => {
+    const n = state.nodes.find(x => x.nodeId === e.peer_node_id);
+    return `<tr>
+      <td class="mono">${esc((e.ts || "").slice(5, 19))}</td>
+      <td><span class="badge ${e.direction === "outbound" ? "blue" : "gray"}">${esc(e.direction)}</span></td>
+      <td>${esc((n && n.name) || e.peer_node_id || "")}</td>
+      <td class="hint">${esc((e.detail || "").slice(0, 80))}</td>
+    </tr>`;
+  }).join("") || '<tr><td colspan="4" class="hint">暂无记录</td></tr>';
+}
+
+async function pushTabUpload(fileList, folderMode) {
+  const node = $("#push-tab-node").value;
+  const base = $("#push-tab-dir").value.trim().replace(/\\/g, "/").replace(/\/$/, "");
+  let ok = 0, fail = 0, lastErr = "";
+  for (const f of fileList) {
+    const rel = folderMode ? (f.webkitRelativePath || f.name) : f.name;
+    const q = new URLSearchParams({ node_id: node, target_dir: base, rel });
+    try {
+      const r = await fetch(`/api/files/upload?${q}`, {
+        method: "POST", headers: { "X-File-Name": encodeURIComponent(f.name) }, body: f });
+      const j = await r.json();
+      if (j.ok) ok++; else { fail++; lastErr = j.detail || j.error || ""; }
+    } catch (e) { fail++; lastErr = String(e); }
+  }
+  toast(`推送完成: 成功 ${ok}${fail ? ` / 失败 ${fail}（${lastErr}）` : ""}`, fail > 0);
+  loadPushTab();
+}
+$("#push-tab-files").addEventListener("change", e => {
+  if (e.target.files.length) pushTabUpload(e.target.files, false);
+  e.target.value = "";
+});
+$("#push-tab-dir-input").addEventListener("change", e => {
+  if (e.target.files.length) pushTabUpload(e.target.files, true);
+  e.target.value = "";
+});
+
+async function loadInboxTab() {
+  const r = await api("/api/files/inbox");
+  $("#inbox-table tbody").innerHTML = (r.entries || []).map(e => `
+    <tr><td>📄 ${esc(e.name)}</td><td>${fmtSize(e.size)}</td>
+    <td class="mono">${new Date(e.mtime * 1000).toLocaleString()}</td></tr>`).join("")
+    || '<tr><td colspan="3" class="hint">收件目录为空</td></tr>';
+  $("#inbox-history-table tbody").innerHTML = (r.history || []).map(h => {
+    const n = state.nodes.find(x => x.nodeId === h.peer);
+    return `<tr><td class="mono">${esc((h.ts || "").slice(5, 19))}</td>
+      <td>${esc((n && n.name) || h.peer || "")}</td>
+      <td class="hint">${esc(h.detail)}</td></tr>`;
+  }).join("") || '<tr><td colspan="3" class="hint">暂无收件记录</td></tr>';
+}
+
+async function loadSyncTab() {
+  // 同步目录文件列表（经本机 list_dir）
+  const r = await api("/api/files/list?node_id=&path=" + encodeURIComponent("sync"));
+  $("#sync-table tbody").innerHTML = (r.entries || []).map(e => `
+    <tr><td>${e.isDir ? "📁" : "📄"} ${esc(e.name)}</td><td>${e.isDir ? "—" : fmtSize(e.size)}</td><td>—</td></tr>`).join("")
+    || '<tr><td colspan="3" class="hint">同步目录为空</td></tr>';
+  // 各节点完成度
+  const s = await api("/api/sync/status");
+  if (!s.ok) {
+    $("#sync-devs").innerHTML = `<p class="hint">同步引擎未启用（${esc(s.detail || s.error || "")}）</p>`;
+    return;
+  }
+  $("#sync-devs").innerHTML = (s.devices || []).map(d => {
+    const pct = d.completion == null ? null : Math.round(d.completion);
+    const badge = d.state === "synced" ? "on" : (d.state === "syncing" ? "yellow" : "off");
+    return `<div class="sync-dev">
+      <b style="min-width:110px">${esc(d.name)}</b>
+      <div class="sync-bar"><div style="width:${pct == null ? 0 : pct}%"></div></div>
+      <span class="badge ${badge}">${pct == null ? "unknown" : pct + "%"}</span>
+    </div>`;
+  }).join("") || '<p class="hint">暂无已配对设备</p>';
+}
+
+async function syncNow() {
+  const r = await api("/api/sync/now", { method: "POST", body: "{}" });
+  toast(r.ok ? (r.detail || "已触发") : "触发失败: " + (r.detail || ""), !r.ok);
+  setTimeout(loadSyncTab, 3000);
+}
+$("#sync-add-input").addEventListener("change", async e => {
+  let ok = 0;
+  for (const f of e.target.files) {
+    const r = await fetch(`/api/sync/add?rel=${encodeURIComponent(f.name)}`,
+      { method: "POST", headers: { "X-File-Name": encodeURIComponent(f.name) }, body: f });
+    const j = await r.json();
+    if (j.ok) ok++;
+  }
+  toast(`已加入同步目录 ${ok} 个文件`);
+  e.target.value = "";
+  loadSyncTab();
 });
 
 /* ---------- 文件浏览器 ---------- */
@@ -810,9 +1039,10 @@ async function pollLoop() {
   refreshOverview();
   refreshNodes();
   refreshExecutors();
-  pollCount++;
-  if (pollCount % 4 === 0 && state.currentChat &&
-      $("#view-chat").classList.contains("active")) openChat(state.currentChat);
+  // 聊天视图打开时每轮（3s）局部刷新消息区（不整页刷新，不打断输入）
+  if (state.currentChat && $("#view-chat").classList.contains("active")) {
+    refreshChatQuiet();
+  }
 }
 /* ---------- 初始化（事件委托 + 监听） ---------- */
 $("#fb-table tbody").addEventListener("click", e => {
