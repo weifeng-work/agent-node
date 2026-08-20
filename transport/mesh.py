@@ -49,36 +49,39 @@ class FileReceiver:
         self.done = threading.Event()
         self.ok = False
         self.error: str | None = None
+        self._io_lock = threading.Lock()   # feed/_finish 互斥（多线程收尾竞态）
         self._fh = open(self.path, "wb")
 
     def feed(self, seq: int, data: bytes) -> None:
-        if self.done.is_set():
-            return
-        if seq != self.expected_seq:
-            self._finish(False, f"block seq out of order: {seq} != {self.expected_seq}")
-            return
-        self.expected_seq += 1
-        try:
-            self._fh.write(data)
-        except OSError as e:
-            self._finish(False, f"write failed: {e}")
-            return
-        self.received += len(data)
-        if self.received >= self.size:
+        with self._io_lock:
+            if self.done.is_set():
+                return
+            if seq != self.expected_seq:
+                self._finish_locked(
+                    False, f"block seq out of order: {seq} != {self.expected_seq}")
+                return
+            self.expected_seq += 1
             try:
-                self._fh.close()
-            except Exception:
-                pass
-            if self.path.stat().st_size != self.size:
-                self._cleanup_partial()
-                self._finish(False, "size mismatch")
+                self._fh.write(data)
+            except OSError as e:
+                self._finish_locked(False, f"write failed: {e}")
                 return
-            actual = P.sha256_file(self.path)
-            if actual != self.sha256:
-                self._cleanup_partial()
-                self._finish(False, "sha256 mismatch")
-                return
-            self._finish(True, None)
+            self.received += len(data)
+            if self.received >= self.size:
+                try:
+                    self._fh.close()
+                except Exception:
+                    pass
+                if self.path.stat().st_size != self.size:
+                    self._cleanup_partial()
+                    self._finish_locked(False, "size mismatch")
+                    return
+                actual = P.sha256_file(self.path)
+                if actual != self.sha256:
+                    self._cleanup_partial()
+                    self._finish_locked(False, "sha256 mismatch")
+                    return
+                self._finish_locked(True, None)
 
     def _cleanup_partial(self) -> None:
         # 半写清理（2.17.5：要么完整要么不落盘）
@@ -91,7 +94,8 @@ class FileReceiver:
         except OSError:
             pass
 
-    def _finish(self, ok: bool, error: str | None) -> None:
+    def _finish_locked(self, ok: bool, error: str | None) -> None:
+        """须在 _io_lock 内调用。"""
         self.ok = ok
         self.error = error
         try:
@@ -113,6 +117,12 @@ class FileReceiver:
             self.reply_conn.send_env(env)
         except Exception:
             pass
+
+    def _finish(self, ok: bool, error: str | None) -> None:
+        with self._io_lock:
+            if self.done.is_set():
+                return
+            self._finish_locked(ok, error)
 
 
 class Connection:

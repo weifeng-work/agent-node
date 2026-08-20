@@ -121,6 +121,14 @@ class ExecutorRegistry:
                 self._add_plugin(WorkBuddyPlugin, "workbuddy", {})
             except Exception as e:
                 self.node_core.log("info", f"WorkBuddy 适配器不可用: {e}")
+            # 2.5) CodeBuddy CLI 适配器（非交互 fresh + 交互式 TUI 常驻）
+            try:
+                from .adapters.codebuddy import (CodeBuddyCliPlugin,
+                                                 CodeBuddyTuiPlugin)
+                self._add_plugin(CodeBuddyCliPlugin, "codebuddy-cli", {})
+                self._add_plugin(CodeBuddyTuiPlugin, "codebuddy-tui", {})
+            except Exception as e:
+                self.node_core.log("info", f"CodeBuddy 适配器不可用: {e}")
             # 3) 配置的 CLI 执行器条目
             for entry in self._config.get("cli_executors") or []:
                 agent_id = entry.get("agent_id")

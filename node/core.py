@@ -64,6 +64,10 @@ class NodeCore:
     def __init__(self, data_dir: Path, panel_port: int | None = None):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        # 项目 bin/ 前置 PATH（psmux 等随包二进制，供插件子进程 which 定位）
+        _bin = self.data_dir.parent / "bin"
+        if _bin.is_dir():
+            os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
         (self.data_dir / "inbox").mkdir(parents=True, exist_ok=True)
         (self.data_dir / "sync").mkdir(parents=True, exist_ok=True)
         self.config = NodeConfig(self.data_dir)
