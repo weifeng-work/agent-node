@@ -95,19 +95,34 @@ def create_app(core) -> FastAPI:
         return FileResponse(result["path"], filename=Path(path).name)
 
     @app.post("/api/files/upload")
-    async def files_upload(request: Request, node_id: str, target_dir: str = ""):
-        """面板上传（2.4.6）: 浏览器原始字节 → 落临时文件 → push 到目标目录。"""
+    async def files_upload(request: Request, node_id: str = "", target_dir: str = "",
+                           rel: str = ""):
+        """面板推送（2.4.6）: 浏览器文件/文件夹选择器 → 当前浏览目录。
+        rel = 文件相对路径（文件夹选择器带 webkitRelativePath，保留目录结构）。"""
         name = request.headers.get("X-File-Name") or "upload.bin"
         import urllib.parse
         name = urllib.parse.unquote(name)
+        if any(ord(c) < 0x20 for c in name + rel + target_dir):
+            return {"ok": False, "error": "agent_error",
+                    "detail": "路径含非法控制字符"}
         data = await request.body()
         if not data:
             return {"ok": False, "error": "agent_error", "detail": "空文件"}
-        tmp = core.config.inbox_dir() / f"_upload_{name}"
+        import uuid as _uuid
         core.config.inbox_dir().mkdir(parents=True, exist_ok=True)
+        tmp = core.config.inbox_dir() / f"_upload_{_uuid.uuid4().hex[:8]}_{name}"
         tmp.write_bytes(data)
-        target = f"{target_dir}/{name}" if target_dir else None
-        return core.file_push(node_id or None, str(tmp), target)
+        base = (target_dir or "").strip().rstrip("/\\")
+        rel_clean = (rel or name).replace("\\", "/").strip("/")
+        # 浏览在根目录（盘符视图）时落到统一收件目录（2.4.2 默认值）
+        target = f"{base}/{rel_clean}" if base else f"inbox/{rel_clean}"
+        try:
+            return core.file_push(node_id or None, str(tmp), target)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     # ---------- 执行器（2.9.10 / 4.3） ----------
     @app.get("/api/executors")

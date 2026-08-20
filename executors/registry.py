@@ -112,8 +112,9 @@ class ExecutorRegistry:
         with self._lock:
             self.plugins.clear()
             self.entries.clear()
-            # 1) 内置 mock（测试桩，第五章 #4）
-            self._add_plugin(MockPlugin, "mock", {})
+            # 1) 内置 mock（测试桩，第五章 #4；node_config.json enable_mock=false 可关闭）
+            if getattr(self.node_core.config, "enable_mock", True):
+                self._add_plugin(MockPlugin, "mock", {})
             # 2) WorkBuddy GUI 适配器（导入失败 = 本机缺依赖，跳过）
             try:
                 from .adapters.workbuddy import WorkBuddyPlugin

@@ -33,6 +33,7 @@ DEFAULT_CONFIG: dict = {
     "peer_tcp_port": 0,
     "manual_peers": [],
     "sync_enabled": True,
+    "enable_mock": True,
     "discovery_ports": DEFAULT_DISCOVERY_PORTS,
 }
 
@@ -131,6 +132,11 @@ class NodeConfig:
     @sync_enabled.setter
     def sync_enabled(self, v: bool) -> None:
         self._cfg["sync_enabled"] = bool(v)
+
+    @property
+    def enable_mock(self) -> bool:
+        """内置 mock 测试桩开关（第五章 #4；验收完成后可关，改 false 重启生效）。"""
+        return bool(self._cfg.get("enable_mock", True))
 
     @property
     def run_as_admin(self) -> bool:

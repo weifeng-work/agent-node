@@ -137,6 +137,8 @@ pre.logbox {
 .switch.on { background: #12351f; }
 .switch.on::after { left: 22px; background: var(--green); }
 .hint { color: var(--muted); font-size: 12px; }
+.flink { color: var(--accent); cursor: pointer; }
+.flink:hover { text-decoration: underline; }
 #modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 500; display: none; align-items: center; justify-content: center; }
 #modal-mask.show { display: flex; }
 #modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; width: 520px; max-height: 80vh; overflow-y: auto; }
@@ -232,12 +234,9 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
   <div id="file-layout">
     <div class="card" id="file-browser">
       <div class="row">
-        <select id="fb-node"></select>
+        <select id="fb-node" onchange="fbNodeChanged()"></select>
         <button class="btn small" onclick="fbGoRoot()">根目录</button>
         <button class="btn small" onclick="fbUp()">上一级</button>
-        <label class="btn small" style="cursor:pointer">
-          上传到当前目录<input type="file" id="fb-upload" style="display:none" multiple onchange="fbUpload(this)">
-        </label>
       </div>
       <div class="crumbs" id="fb-crumbs"></div>
       <div style="max-height:56vh; overflow-y:auto">
@@ -248,15 +247,18 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
     </div>
     <div id="file-side">
       <div class="card">
-        <h3>快捷目录</h3>
-        <p><a style="color:var(--accent);cursor:pointer" onclick="fbLocal('inbox')">本机收件目录 data/inbox/</a></p>
-        <p><a style="color:var(--accent);cursor:pointer" onclick="fbLocal('sync')">同步目录 data/sync/</a></p>
+        <h3>快捷目录（本机）</h3>
+        <p><a class="flink" data-nav="inbox">收件目录 data/inbox/</a></p>
+        <p><a class="flink" data-nav="sync">同步目录 data/sync/</a></p>
       </div>
       <div class="card">
-        <h3>推送本地文件</h3>
-        <div class="row"><input type="text" id="fp-local" placeholder="本机绝对路径"></div>
-        <div class="row"><input type="text" id="fp-target" placeholder="目标路径（空=收件目录）"></div>
-        <button class="btn primary" onclick="pushFile()">推送 push</button>
+        <h3>推送到当前浏览目录</h3>
+        <p class="hint" id="push-target-hint">目标: …</p>
+        <div class="row">
+          <label class="btn primary" style="cursor:pointer">选择文件…<input type="file" id="push-files" multiple style="display:none"></label>
+          <label class="btn" style="cursor:pointer">选择文件夹…<input type="file" id="push-dir" webkitdirectory style="display:none"></label>
+        </div>
+        <p class="hint">在根目录时推送到对方统一收件目录 data/inbox/（2.4.2）。文件夹推送保留目录结构（不经打包）。</p>
       </div>
     </div>
   </div>
@@ -529,57 +531,79 @@ $("#chat-input").addEventListener("keydown", e => {
 });
 
 /* ---------- 文件浏览器 ---------- */
+/* 路径一律经 data-* 属性传递（事件委托读取 dataset），规避内联 JS 字符串
+   吞反斜杠/转义（如 'C:\Users' → 'C:Users'、'\b' → 退格符）的问题 */
+function fbTargetLabel() {
+  const node = $("#fb-node").value;
+  const who = node ? ((state.nodes.find(n => n.nodeId === node) || {}).name || node) : "本机";
+  return state.fbPath ? `${who} · ${state.fbPath}` : `${who} · 根目录`;
+}
+function fbUpdateHint() { $("#push-target-hint").textContent = "目标: " + fbTargetLabel(); }
+function fbNodeChanged() { state.fbPath = ""; fbList(); }
 async function fbList() {
   const node = $("#fb-node").value;
   state.fbNode = node;
   const path = state.fbPath || "";
   const r = await api(`/api/files/list?node_id=${encodeURIComponent(node)}&path=${encodeURIComponent(path)}`);
-  if (!r.ok) return toast(r.detail || "列目录失败", true);
+  if (!r.ok) { toast(r.detail || "列目录失败", true); return; }
   state.fbPath = r.path || path;
   renderCrumbs(state.fbPath);
   const tb = $("#fb-table tbody");
+  const isLocal = !node;   // 本机文件本就在硬盘，隐藏下载按钮（无意义操作）
   tb.innerHTML = (r.entries || []).map(e => `
     <tr>
       <td>${e.isDir
-        ? `<a style="color:var(--accent);cursor:pointer" onclick="fbEnter('${esc(e.path).replace(/'/g,"&#39;")}')">📁 ${esc(e.name)}</a>`
+        ? `<a class="flink" data-enter="${esc(e.path)}">📁 ${esc(e.name)}</a>`
         : `📄 ${esc(e.name)}`}</td>
       <td>${e.isDir ? "目录" : "文件"}</td>
       <td>${e.isDir ? "—" : fmtSize(e.size)}</td>
-      <td>${e.isDir
-        ? `<button class="btn small" onclick="fbDownloadDir('${esc(e.path).replace(/'/g,"&#39;")}')">整树下载</button>`
-        : `<button class="btn small" onclick="fbDownload('${esc(e.path).replace(/'/g,"&#39;")}')">下载</button>`}</td>
+      <td>${isLocal ? "—" : (e.isDir
+        ? `<button class="btn small" data-dldir="${esc(e.path)}">整树下载</button>`
+        : `<button class="btn small" data-dl="${esc(e.path)}">下载</button>`)}</td>
     </tr>`).join("") || '<tr><td colspan="4" class="hint">空目录</td></tr>';
+  fbUpdateHint();
 }
 function renderCrumbs(path) {
-  const parts = String(path).split(/[\\/]/).filter(Boolean);
-  let acc = path.startsWith("/") ? "" : "";
+  const el = $("#fb-crumbs");
+  if (!path) { el.innerHTML = `<span>根目录（选择磁盘）</span>`; return; }
+  if (/^[A-Za-z]:\\?$/.test(path)) { el.innerHTML = `<span>${esc(path.slice(0, 2))}:\</span>`; return; }
   let html = "";
-  if (path[1] === ":") { // Windows 盘符
-    html = `<a onclick="fbEnter('${path.slice(0,3)}')">${path.slice(0,2)}</a>`;
-    let cur = path.slice(0,3);
-    for (const p of path.slice(3).split("\\").filter(Boolean)) {
-      cur = cur.replace(/\\$/, "") + "\\" + p;
-      html += ` <span>›</span> <a onclick="fbEnter('${esc(cur)}')">${esc(p)}</a>`;
+  if (/^[A-Za-z]:/.test(path)) {
+    const drive = path.slice(0, 2);
+    html = `<a class="flink" data-crumb="${drive}:\\">${esc(drive)}:</a>`;
+    let cur = drive + ":\\";
+    for (const part of path.slice(3).split("\\").filter(Boolean)) {
+      cur = cur.replace(/\\$/, "") + "\\" + part;
+      html += ` <span>›</span> <a class="flink" data-crumb="${esc(cur)}">${esc(part)}</a>`;
     }
   } else {
-    html = `<a onclick="fbEnter('/')">/</a>`;
+    html = `<a class="flink" data-crumb="/">/</a>`;
     let cur = "";
-    for (const p of parts) { cur += "/" + p; html += ` <span>›</span> <a onclick="fbEnter('${esc(cur)}')">${esc(p)}</a>`; }
+    for (const part of String(path).split("/").filter(Boolean)) {
+      cur += "/" + part;
+      html += ` <span>›</span> <a class="flink" data-crumb="${esc(cur)}">${esc(part)}</a>`;
+    }
   }
-  $("#fb-crumbs").innerHTML = html;
+  el.innerHTML = html;
 }
 function fbGoRoot() { state.fbPath = ""; fbList(); }
 function fbEnter(path) { state.fbPath = path; fbList(); }
 function fbUp() {
   const p = state.fbPath || "";
-  let parent;
+  if (p === "") return;
   if (/^[A-Za-z]:\\?$/.test(p)) { state.fbPath = ""; return fbList(); }
-  if (p.includes("\\")) { parent = p.replace(/\\[^\\]+\\?$/, ""); if (!parent.endsWith("\\")) parent += "\\"; }
-  else parent = p.replace(/\/[^/]+\/?$/, "") || "/";
+  let parent;
+  if (p.includes("\\")) {
+    parent = p.replace(/\\[^\\]+\\?$/, "");
+    if (/^[A-Za-z]:$/.test(parent)) parent += "\\";
+  } else {
+    parent = p.replace(/\/[^/]+\/?$/, "") || "/";
+  }
   state.fbPath = parent;
   fbList();
 }
 function fbDownload(path) {
+  /* 远程文件下载: 经面板 pull 到本机收件目录后由浏览器弹出保存位置选择 */
   const node = $("#fb-node").value;
   window.open(`/api/files/download?node_id=${encodeURIComponent(node)}&path=${encodeURIComponent(path)}`);
 }
@@ -589,33 +613,31 @@ function fbDownloadDir(path) {
     .then(r => {
       const files = (r.entries || []).filter(e => !e.isDir);
       if (!files.length) return toast("空目录");
+      toast(`开始逐文件下载 ${files.length} 个（浏览器可能拦截多弹窗，请允许）`);
       let i = 0;
       const next = () => { if (i < files.length) fbDownload(files[i++].path); };
-      toast(`开始逐文件下载 ${files.length} 个（浏览器可能拦多弹窗，请允许）`);
-      let timer = setInterval(() => { next(); if (i >= files.length) clearInterval(timer); }, 900);
+      let timer = setInterval(() => { next(); if (i >= files.length) clearInterval(timer); }, 1000);
     });
 }
-async function fbUpload(input) {
+async function uploadFiles(fileList, folderMode) {
   const node = $("#fb-node").value;
-  const dir = state.fbPath || "";
-  for (const f of input.files) {
-    const r = await fetch(`/api/files/upload?node_id=${encodeURIComponent(node)}&target_dir=${encodeURIComponent(dir)}`,
-      { method: "POST", headers: { "X-File-Name": encodeURIComponent(f.name) }, body: f });
-    const j = await r.json();
-    toast(j.ok ? `已上传 ${f.name}` : `上传失败: ${j.detail}`, !j.ok);
+  const base = state.fbPath || "";
+  let ok = 0, fail = 0, lastErr = "";
+  for (const f of fileList) {
+    const rel = folderMode ? (f.webkitRelativePath || f.name) : f.name;
+    const q = new URLSearchParams({ node_id: node, target_dir: base, rel: rel });
+    try {
+      const r = await fetch(`/api/files/upload?${q}`, {
+        method: "POST",
+        headers: { "X-File-Name": encodeURIComponent(f.name) },
+        body: f
+      });
+      const j = await r.json();
+      if (j.ok) ok++; else { fail++; lastErr = j.detail || j.error || ""; }
+    } catch (e) { fail++; lastErr = String(e); }
   }
-  input.value = "";
+  toast(`推送完成: 成功 ${ok}${fail ? ` / 失败 ${fail}（${lastErr}）` : ""}`, fail > 0);
   fbList();
-}
-function fbLocal(sub) { state.fbPath = ""; $("#fb-node").value = ""; fbList(); }
-async function pushFile() {
-  const local = $("#fp-local").value.trim(), target = $("#fp-target").value.trim();
-  const node = $("#fb-node").value;
-  if (!local) return toast("请填写本机路径", true);
-  const r = await api("/api/files/push", {
-    method: "POST",
-    body: JSON.stringify({ node_id: node, local_path: local, target_path: target || null })});
-  toast(r.ok ? "推送成功: " + (r.detail || "") : "推送失败: " + (r.detail || r.error), !r.ok);
 }
 
 /* ---------- 执行器 ---------- */
@@ -654,16 +676,29 @@ async function queryExec(id) {
   else toast(r.detail || r.error || "查询失败", true);
 }
 async function toggleSuspend(id, suspend) {
-  let body = { executor_id: id, suspend };
-  if (suspend) {
-    const reason = prompt("挂起原因（可空，如: 超额）", "") || "手动";
-    body.reason = reason;
-    const until = prompt("到期时间点（可空，ISO 格式如 2026-08-20T18:00:00，空=长期）", "");
-    if (until) body.until = until;
+  if (!suspend) {   // 恢复: 直接执行
+    const r = await api("/api/executors/suspend", {
+      method: "POST", body: JSON.stringify({ executor_id: id, suspend: false })});
+    toast(r.ok ? "已恢复" : "操作失败", !r.ok);
+    refreshExecutors();
+    return;
   }
-  const r = await api("/api/executors/suspend", { method: "POST", body: JSON.stringify(body) });
-  toast(r.ok ? (suspend ? "已挂起" : "已恢复") : "操作失败", !r.ok);
-  refreshExecutors();
+  // 挂起: 弹正式表单（原因 + 到期时间，4.3）
+  openModal("挂起执行器: " + id, `
+    <div class="row"><label>原因</label>
+      <input id="sp-reason" value="手动" style="min-width:220px"></div>
+    <div class="row"><label>到期时间</label>
+      <input type="datetime-local" id="sp-until" style="min-width:200px"></div>
+    <p class="hint">挂起期间拒绝任务并返回 suspended 错误码；不设到期时间则长期挂起，可随时手动恢复；到点自动恢复（额度刷新场景）。</p>`,
+    async () => {
+      const untilRaw = $("#sp-until").value;
+      const until = untilRaw ? new Date(untilRaw).toISOString() : null;
+      const r = await api("/api/executors/suspend", { method: "POST", body: JSON.stringify({
+        executor_id: id, suspend: true, reason: $("#sp-reason").value, until })});
+      toast(r.ok ? "已挂起" : "操作失败", !r.ok);
+      closeModal();
+      refreshExecutors();
+    });
 }
 async function restartPlugin(id) {
   const r = await api("/api/executors/restart", { method: "POST", body: JSON.stringify({ executor_id: id })});
@@ -746,6 +781,7 @@ async function loadSettings() {
 async function saveName() {
   const r = await api("/api/settings/name", {
     method: "POST", body: JSON.stringify({ name: $("#set-name").value })});
+  $("#set-name").classList.remove("unsaved");
   toast(r.ok ? "名称已保存并随 beacon 广播" : "保存失败", !r.ok);
   refreshOverview();
 }
@@ -753,6 +789,7 @@ async function saveTeam() {
   const t = $("#set-team").value.trim();
   if (!confirm(`切换 team 到「${t || "无 team"}」？将断开旧 team 连接，需重新发现。`)) return;
   const r = await api("/api/settings/team", { method: "POST", body: JSON.stringify({ team_id: t })});
+  $("#set-team").classList.remove("unsaved");
   toast(r.ok ? "team 已切换" : "切换失败", !r.ok);
   refreshOverview(); refreshNodes();
 }
@@ -777,6 +814,35 @@ async function pollLoop() {
   if (pollCount % 4 === 0 && state.currentChat &&
       $("#view-chat").classList.contains("active")) openChat(state.currentChat);
 }
+/* ---------- 初始化（事件委托 + 监听） ---------- */
+$("#fb-table tbody").addEventListener("click", e => {
+  const t = e.target.closest("[data-enter],[data-dl],[data-dldir]");
+  if (!t) return;
+  if (t.dataset.enter) fbEnter(t.dataset.enter);
+  else if (t.dataset.dl) fbDownload(t.dataset.dl);
+  else if (t.dataset.dldir) fbDownloadDir(t.dataset.dldir);
+});
+$("#fb-crumbs").addEventListener("click", e => {
+  const t = e.target.closest("[data-crumb]");
+  if (t) fbEnter(t.dataset.crumb);
+});
+$("#file-side").addEventListener("click", e => {
+  const t = e.target.closest("[data-nav]");
+  if (t) { $("#fb-node").value = ""; fbEnter(t.dataset.nav); }
+});
+$("#push-files").addEventListener("change", e => {
+  if (e.target.files.length) uploadFiles(e.target.files, false);
+  e.target.value = "";
+});
+$("#push-dir").addEventListener("change", e => {
+  if (e.target.files.length) uploadFiles(e.target.files, true);
+  e.target.value = "";
+});
+// 2.9.9 未保存标记：输入即标记，保存后消除
+["set-name", "set-team"].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("input", () => el.classList.add("unsaved"));
+});
 refreshOverview(); refreshNodes(); refreshExecutors(); loadSettings();
 setInterval(pollLoop, 3000);
 </script>

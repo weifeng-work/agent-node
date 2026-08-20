@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,6 +91,7 @@ class NodeCore:
         self._remote_results: dict[str, dict] = {}  # 远端推送结果缓存（sync 模式加速）
         self._remote_tasks: dict[str, str] = {}     # task_id -> 远端 node_id
         self._async_retry: list[tuple[str, float]] = []
+        self._dedup_msgs: dict[str, deque] = {}     # sender -> 近期 msg_id（2.13.4）
         self._stopping = False
         self._lock_file = None
 
@@ -124,6 +126,8 @@ class NodeCore:
                          name="manual-peers").start()
         threading.Thread(target=self._async_retry_loop, daemon=True,
                          name="async-retry").start()
+        threading.Thread(target=self._heartbeat_log_loop, daemon=True,
+                         name="heartbeat-log").start()
         # 同步引擎（可选，缺失二进制则降级跳过；后台线程启动不阻塞节点就绪）
         if self.config.sync_enabled:
             threading.Thread(target=self._start_sync, daemon=True,
@@ -144,6 +148,29 @@ class NodeCore:
                 self.log("warning", "同步引擎启动失败（REST 未就绪），本次跳过")
         except Exception as e:
             self.log("warning", f"同步引擎未启用: {e}")
+
+    def _heartbeat_log_loop(self) -> None:
+        """周期心跳摘要日志（每 5 分钟；无事件时也能从 node.log 看到连接存活，
+        回应用户「应有心跳记录」的观察——ping/pong 本身不落日志以免刷屏）。"""
+        while not self._stopping:
+            try:
+                with self.mesh._conn_lock:
+                    conns = [pid for pid, c in self.mesh.connections.items()
+                             if c.alive and c.handshake_done]
+                names = []
+                for pid in conns:
+                    peer = self.store.peer(pid)
+                    names.append((peer or {}).get("name") or pid[-6:])
+                self.log("info", f"心跳: mesh 连接 {len(conns)} 个"
+                                 f"（{', '.join(names) if names else '无'}）; "
+                                 f"运行 {int((time.time() - self.started_at) // 60)} 分钟; "
+                                 f"插件 {len(self.registry.plugins)} 个")
+            except Exception:
+                pass
+            for _ in range(300):
+                if self._stopping:
+                    return
+                time.sleep(1)
 
     def stop(self) -> None:
         self._stopping = True
@@ -367,6 +394,17 @@ class NodeCore:
     def handle_envelope(self, env: dict, conn) -> None:
         t = env.get("type")
         sender = env.get("sender_node_id") or "?"
+        # 2.13.4 msg_id 去重（防 fire-and-forget 重发重复；ping/pong/error 除外）
+        if t not in (P.T_PING, P.T_PONG, P.T_ERROR):
+            mid = env.get("msg_id") or ""
+            if mid:
+                with self._lock:
+                    dq = self._dedup_msgs.setdefault(sender, deque(maxlen=2048))
+                    if mid in dq:
+                        self.log("warning", f"重复消息已丢弃: {t} msg_id={mid[:8]} "
+                                             f"from {sender}")
+                        return
+                    dq.append(mid)
         try:
             self.store.add_comm_log("inbound", sender, t, env.get("correlation_id"),
                                     None, self._summarize(env))
@@ -466,6 +504,9 @@ class NodeCore:
     # ---------- 文件（2.4，受 allow_file；附件例外走 allow_ai_task，2.13.1） ----------
     def _resolve_target_path(self, target_path: str, purpose: str,
                              task_ref: dict) -> Path:
+        # 控制字符防御（如前端转义事故产生的 \x08）：直接拒绝而非落盘报错
+        if any(ord(c) < 0x20 for c in target_path):
+            raise ValueError("目标路径含非法控制字符（请检查前端路径传递）")
         p = Path(target_path)
         if p.is_absolute():
             return p
@@ -570,7 +611,21 @@ class NodeCore:
                                       result, correlation_id=env.get("msg_id")))
 
     def _list_dir_local(self, path: str, recursive: bool = False) -> dict:
-        p = Path(path or ("C:\\" if sys.platform == "win32" else "/"))
+        raw = (path or "").strip()
+        if not raw:
+            # 根视图：枚举盘符（Windows，含其他硬盘）/ 根目录（POSIX）——2.4.6 从平台根开始
+            if os.name == "nt":
+                try:
+                    drives = list(os.listdrives())  # Python 3.12+
+                except AttributeError:
+                    import string as _string
+                    drives = [f"{c}:\\" for c in _string.ascii_uppercase
+                              if Path(f"{c}:\\").exists()]
+                entries = [{"name": d.replace("\\", "") or d, "path": d,
+                            "isDir": True, "size": 0} for d in drives if d]
+                return {"ok": True, "entries": entries, "path": "", "isDir": True}
+            raw = "/"
+        p = Path(raw)
         if not p.is_absolute():
             p = (self.data_dir / p).resolve()
         if not p.exists():

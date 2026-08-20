@@ -140,10 +140,22 @@ class TestRegistry(unittest.TestCase):
 
     def test_capabilities_payload_only_available(self):
         """2.2.12: 探测不到的执行器不广播。"""
+        import subprocess
+        try:
+            out = subprocess.run(["tasklist", "/fi", "imagename eq WorkBuddy.exe",
+                                  "/fo", "csv", "/nh"], capture_output=True,
+                                 timeout=10).stdout
+            wb_running = b"WorkBuddy.exe" in out
+        except Exception:
+            wb_running = False
         caps = self.reg.capabilities_payload()
         agents = [c["agentId"] for c in caps]
         self.assertIn("mock", agents)
-        self.assertNotIn("workbuddy", agents)  # 测试机无 WorkBuddy 运行/或本机无依赖
+        # WorkBuddy 仅在本机实际运行时才广播（2.2.12 以启动时探测为准）
+        if wb_running:
+            self.assertIn("workbuddy", agents)
+        else:
+            self.assertNotIn("workbuddy", agents)
 
     def test_external_plugin_load(self):
         """2.2.10: data/plugins/ 外部插件加载。"""
