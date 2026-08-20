@@ -285,7 +285,7 @@ def handle_message(msg: dict) -> dict | None:
         return {"jsonrpc": "2.0", "id": msg_id, "result": {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "agent-node-mcp", "version": "1.0.0"}}}
+            "serverInfo": {"name": "agent-node", "version": "1.0.0"}}}
     if method == "notifications/initialized":
         return None
     if method == "ping":
