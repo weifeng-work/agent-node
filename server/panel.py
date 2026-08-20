@@ -89,6 +89,12 @@ def create_app(core) -> FastAPI:
         return core.file_pull(body.get("node_id") or None,
                               body.get("path") or "")
 
+    @app.post("/api/files/push_dir")
+    async def files_push_dir(body: dict):
+        return core.push_dir(body.get("node_id") or None,
+                             body.get("local_root") or "",
+                             body.get("target_base") or "inbox")
+
     @app.get("/api/files/download")
     def files_download(node_id: str, path: str):
         """面板下载: pull 到本机收件目录后返回内容（单文件流式）。"""

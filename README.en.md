@@ -91,6 +91,7 @@ same machine never collide. 30+ tools built in.
 python -m tools.cli register        # create identity
 python -m tools.cli list            # list nodes & executors
 python -m tools.cli task --target <node_id> --executor workbuddy --prompt "a task for WorkBuddy"
+python -m tools.cli push-dir --root <dir> --to <node_id> --target inbox/migrated   # push whole directory tree (no packing)
 ```
 
 ### Have any AI drive this node

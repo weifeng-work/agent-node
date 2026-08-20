@@ -178,6 +178,11 @@ TOOLS = [
     {"name": "file_push", "description": "推送文件到目标节点任意路径（默认统一收件目录）",
      "inputSchema": _s({"node_id": {"type": "string"}, "local_path": {"type": "string"},
                         "target_path": {"type": "string"}}, ["node_id", "local_path"])},
+    {"name": "file_push_dir", "description": "整目录树推送（逐文件保留相对路径、免打包；受目标 allow_file；自动排除 venv/data/node_modules 等）",
+     "inputSchema": _s({"node_id": {"type": "string"},
+                        "local_root": {"type": "string", "description": "本机要发送的目录"},
+                        "target_base": {"type": "string", "description": "远端基础路径，默认 inbox"}},
+                       ["local_root"])},
     {"name": "file_pull", "description": "从目标节点拉取文件/目录到本机收件目录（目录整树递归）",
      "inputSchema": _s({"node_id": {"type": "string"}, "path": {"type": "string"}},
                        ["node_id", "path"])},
@@ -282,6 +287,11 @@ def dispatch_tool(name: str, args: dict) -> str:
                        {"node_id": a.get("node_id") or None,
                         "local_path": a["local_path"],
                         "target_path": a.get("target_path")})
+    elif name == "file_push_dir":
+        r = panel_call("POST", "/api/files/push_dir", {
+            "node_id": a.get("node_id") or None,
+            "local_root": a["local_root"],
+            "target_base": a.get("target_base") or "inbox"})
     elif name == "file_pull":
         r = _file_pull(a)
     elif name == "sync_now":

@@ -233,7 +233,9 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
 <div class="view" id="view-chat">
   <h2>消息</h2>
   <div id="chat-layout">
-    <div id="chat-left" class="card" style="padding:8px"><div id="conv-list"></div></div>
+    <div id="chat-left" class="card" style="padding:8px">
+      <div id="conv-list"></div>
+    </div>
     <div id="chat-right">
       <div id="chat-msgs"><p class="hint" style="margin:auto">选择左侧会话开始聊天</p></div>
       <div id="chat-input-bar">
@@ -627,13 +629,20 @@ async function addManualPeer() {
 }
 
 /* ---------- 聊天 ---------- */
+/* 节点离线时长判定：在线=不判走；离线且 lastSeen 距今超过 maxAwayMs=判为远离 */
+function peerAway(peerId, maxAwayMs) {
+  const n = state.nodes.find(x => x.nodeId === peerId);
+  if (!n || n.online) return false;
+  const ts = Date.parse(n.lastSeen || "");
+  return !!ts && (Date.now() - ts) > maxAwayMs;
+}
 async function loadConversations() {
   const r = await api("/api/chat/conversations");
   const el = $("#conv-list");
   /* 并集聚合: 会话(真正发过消息) + 已知/在线节点(未聊过也列出, 便于发起) */
   const convs = r.conversations || [];
   const seen = new Set();
-  const merged = [];
+  let merged = [];
   for (const c of convs) {                // 先放真正有消息的会话
     merged.push({ peer_node_id: c.peer_node_id, msg_count: c.msg_count,
                   last_ts: c.last_ts, hasChat: true });
@@ -644,6 +653,8 @@ async function loadConversations() {
     merged.push({ peer_node_id: n.nodeId, hasChat: false });
     seen.add(n.nodeId);
   }
+  /* 始终隐藏离线节点：离线 >60s 即从消息页移除（防污染；历史记录可在日志查看） */
+  merged = merged.filter(c => !peerAway(c.peer_node_id, 60000));
   /* 排序: 有聊天的按最后消息时间倒序; 未聊的排在其后(在线优先) */
   merged.sort((a, b) => {
     if (a.last_ts && b.last_ts) return b.last_ts < a.last_ts ? -1 : (b.last_ts > a.last_ts ? 1 : 0);
@@ -949,7 +960,9 @@ async function refreshExecutors() {
   try {
     const r = await api("/api/executors");
     const tb = $("#exec-table tbody");
-    tb.innerHTML = (r.executors || []).map(e => {
+    // 执行器页即时自动清理：仅保留本机执行器 + 在线节点的执行器（离线节点及其执行器不显示）
+    const list = (r.executors || []).filter(e => e.local || e.online);
+    tb.innerHTML = list.map(e => {
       const st = e.status || {};
       const stateBadge = st.state === "busy" ? "yellow" : (st.state === "suspended" ? "purple" :
         (e.online ? "on" : "off"));
@@ -1119,9 +1132,11 @@ async function pollLoop() {
   refreshOverview();
   refreshNodes();
   refreshExecutors();
-  // 聊天视图打开时每轮（3s）局部刷新消息区（不整页刷新，不打断输入）
-  if (state.currentChat && $("#view-chat").classList.contains("active")) {
-    refreshChatQuiet();
+  // 消息视图激活时每轮（3s）刷新：会话列表始终刷新（在线节点即现，选中文案时跳过）；
+  // 打开了具体会话时再额外刷右侧消息区
+  if ($("#view-chat").classList.contains("active")) {
+    loadConversations();
+    if (state.currentChat) refreshChatQuiet();
   }
 }
 /* ---------- 初始化（事件委托 + 监听） ---------- */

@@ -93,6 +93,10 @@ def main() -> int:
     sp = sub.add_parser("download")
     sp.add_argument("--from", dest="frm", required=True)
     sp.add_argument("--path", required=True)
+    sp = sub.add_parser("push-dir", help="整目录树推送（逐文件保留相对路径，免打包）")
+    sp.add_argument("--root", required=True, help="本机要发送的目录")
+    sp.add_argument("--to", default="", help="目标 node_id（空=本机）")
+    sp.add_argument("--target", default="inbox", help="远端基础路径（默认 inbox）")
     sp = sub.add_parser("ls")
     sp.add_argument("--node", default="")
     sp.add_argument("--path", default="")
@@ -143,6 +147,10 @@ def main() -> int:
     elif a.cmd == "download":
         out(call("POST", "/api/files/pull",
                  {"node_id": a.frm or None, "path": a.path}))
+    elif a.cmd == "push-dir":
+        out(call("POST", "/api/files/push_dir", {
+            "node_id": a.to or None, "local_root": a.root,
+            "target_base": a.target}))
     elif a.cmd == "ls":
         q = (f"?node_id={urllib.parse.quote(a.node)}&path={urllib.parse.quote(a.path)}"
              f"&recursive={'true' if a.recursive else 'false'}")

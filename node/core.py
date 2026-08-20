@@ -36,6 +36,10 @@ BEACON_ONLINE_SEC = 6.0     # 2.1.6 默认时序参数
 PROBE_FAILS = 3
 MAX_LIST_ENTRIES = 5000
 SHELL_DEFAULT_TIMEOUT = 60
+# 整目录推送默认排除项（避免把 venv/data/依赖/构建产物推给对端）
+_EXCLUDE_DIRS = {"venv", "data", ".git", "__pycache__", "node_modules",
+                 "dist", "build", ".idea", ".vscode", "node.lock"}
+STALE_PURGE_SEC = 7 * 86400   # 长期离线节点自动清理窗口（7 天 > 该时长则移除，comm_log 保留）
 ASYNC_RETRY_TTL = 600   # 2.6 异步回执重试窗口（秒）
 REMOTE_CACHE_TTL = 3600  # 远端结果/任务/异步挂起缓存回收窗口（对齐 registry 1h）
 
@@ -59,6 +63,19 @@ def _pid_alive(pid: int) -> bool:
             return True
     except Exception:
         return False
+
+
+def _iter_dir_proj_files(root: Path, exclude: set[str]) -> list[str]:
+    """枚举目录内文件的相对路径（posix 分隔），跳过被排除目录/文件（整目录推送用）。"""
+    rels = []
+    for p in sorted(root.rglob("*")):
+        if p.is_dir():
+            continue
+        rel = p.relative_to(root)
+        if any(part in exclude for part in rel.parts):
+            continue
+        rels.append(rel.as_posix())
+    return rels
 
 
 class NodeCore:
@@ -162,6 +179,7 @@ class NodeCore:
         回应用户「应有心跳记录」的观察——ping/pong 本身不落日志以免刷屏）。"""
         while not self._stopping:
             self._prune_remote_caches()
+            self._auto_purge_stale_peers()
             try:
                 with self.mesh._conn_lock:
                     conns = [pid for pid, c in self.mesh.connections.items()
@@ -980,6 +998,32 @@ class NodeCore:
         return {"ok": not failed, "files": succeeded, "failed": failed,
                 "detail": f"已拉取 {succeeded} 个文件到 {dest_root}"}
 
+    # ---------- 整目录推送（2.4：逐文件保留 rel 路径，免打包） ----------
+    def push_dir(self, node_id: str | None, local_root: str,
+                 target_base: str = "inbox", exclude: list[str] | None = None) -> dict:
+        root = Path(local_root)
+        if not root.is_dir():
+            return {"ok": False, "error": "agent_error", "detail": f"本地目录不存在: {root}"}
+        excludes = set(exclude or []) | _EXCLUDE_DIRS
+        rels = _iter_dir_proj_files(root, excludes)
+        if not rels:
+            return {"ok": False, "error": "agent_error",
+                    "detail": "目录内无文件（或全部被默认排除）"}
+        base = (target_base or "inbox").rstrip("/")
+        pushed, failed = 0, []
+        for rel in rels:
+            r = self.file_push(node_id, str(root / rel), f"{base}/{rel}")
+            if r.get("ok"):
+                pushed += 1
+            else:
+                failed.append({"path": rel,
+                               "error": r.get("error") or r.get("detail") or "推送失败"})
+        ok = not failed
+        return {"ok": ok, "files": len(rels), "pushed": pushed, "failed": failed,
+                "detail": (f"已推送 {pushed}/{len(rels)} 个文件"
+                           if ok else f"推送 {pushed}/{len(rels)}，失败 {len(failed)}："
+                                      f"{'; '.join(f['path'] for f in failed[:20])}")}
+
     # ---------- shell ----------
     def shell_exec(self, target_node_id: str | None, command: str,
                    timeout: float = SHELL_DEFAULT_TIMEOUT) -> dict:
@@ -1255,6 +1299,34 @@ class NodeCore:
                     continue
                 self._async_pending_ts.pop(tid, None)
                 self._async_pending.pop(tid, None)
+
+    def _auto_purge_stale_peers(self) -> None:
+        """自动清理长期离线测试节点：离线超 STALE_PURGE_SEC 且当前不在线→移除
+        节点记录与聊天记录（comm_log 审计保留，防污染面板；重新上线经 beacon 自动恢复）。"""
+        import datetime as _dt
+        try:
+            cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=STALE_PURGE_SEC)
+            for p in self.store.peers():
+                node_id = p.get("node_id")
+                if not node_id or node_id == self.node_id:
+                    continue
+                if self.is_peer_online(node_id):
+                    continue
+                last = p.get("last_seen") or ""
+                if not last:
+                    continue
+                try:
+                    ts = _dt.datetime.fromisoformat(last)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=_dt.timezone.utc)
+                except ValueError:
+                    continue
+                if ts < cutoff:
+                    self.store.delete_node_records(node_id)
+                    self.log("info", f"自动清理长期离线节点记录: {node_id} "
+                                     f"（last_seen={last}，comm_log 保留）")
+        except Exception:
+            pass
 
     # ---------- inbox ----------
     def check_inbox(self, caller_id: str) -> list[dict]:

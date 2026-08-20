@@ -87,6 +87,7 @@ caller_id（异步回执专属邮箱的身份键）**由系统自动派生**：M
 python -m tools.cli register        # 生成身份
 python -m tools.cli list            # 列出节点与执行器
 python -m tools.cli task --target <node_id> --executor workbuddy --prompt "要 WorkBuddy 做的任务"
+python -m tools.cli push-dir --root <目录> --to <node_id> --target inbox/migrated   # 整目录树推送（免打包）
 ```
 
 ### 让任何 AI 自动驾驶本节点

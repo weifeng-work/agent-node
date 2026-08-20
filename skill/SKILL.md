@@ -88,6 +88,7 @@ caller_id 无需配置（MCP 自动派生；CLI 用 `cli.py register` 生成身�
 
 ```
 file_push(node_id, local_path, target_path?)   # 推送（默认落对方 data/inbox/）
+file_push_dir(node_id, local_root, target_base?)   # 整目录树推送（免打包，自动排除 venv/data/node_modules 等；默认落对方 data/inbox/<相对路径>/）
 file_pull(node_id, path)                        # 拉取（默认落本机 data/inbox/）
 list_dir(node_id, path, recursive?)             # 浏览对方任意目录
 sync_now()                                      # 触发 data/sync/ 同步目录扫描
