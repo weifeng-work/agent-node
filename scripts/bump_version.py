@@ -32,9 +32,13 @@ def main() -> int:
         raise SystemExit(f"❌ 未找到 {VERSION_PY}")
 
     src = VERSION_PY.read_text(encoding="utf-8")
-    new = re.sub(r'VERSION\s*=\s*"[^"]*"', f'VERSION = "{version}"', src, count=1)
-    if new == src:
+    new, n = re.subn(r'VERSION\s*=\s*"[^"]*"', f'VERSION = "{version}"', src, count=1)
+    if n == 0:
         raise SystemExit(f"❌ {VERSION_PY} 中未找到 VERSION = \"x.y.z\" 常量")
+    if new == src:
+        # 常量已是目标版本（如同 tag 重跑），无需变更，正常返回
+        print(f"ℹ️ {VERSION_PY} 已是 {version}，忽略")
+        return 0
     VERSION_PY.write_text(new, encoding="utf-8")
     print(f"✓ 版本号已写入 {VERSION_PY} -> {version}")
     return 0

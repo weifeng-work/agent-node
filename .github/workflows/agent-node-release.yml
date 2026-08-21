@@ -20,9 +20,12 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      # 直接以 main 为 checkout 目标：tag 事件下 GITHUB_REF 仍是 tag，取版本不受影响；
+      # 若默认 checkout tag 会处于 detached HEAD，还需再切 main，且本地未必有 main 分支引用。
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Setup Python
@@ -34,15 +37,12 @@ jobs:
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      # 切回 main（tag 是 detached HEAD；写回必须基于 main，避免非快进被拒）
-      - name: Switch to main
-        run: git checkout main
-
-      # 把 tag 版本写入 node/version.py（纯 Python，无 npm）
+      # 把 tag 版本写入 node/version.py（纯 Python，无 npm；同版本幂等）
       - name: Bump version.py
         run: python3 scripts/bump_version.py "${{ steps.tag.outputs.tag }}"
 
-      # 写回 main：main-zip 部署形态读取该常量显示版本
+      # 写回 main：main-zip 部署形态读取该常量显示版本。先 pull --rebase 以吸收
+      # 发版窗口内的并发提交，避免非快进被拒；main 若开分支保护需单独放行 bot。
       - name: Commit version back to main
         run: |
           git config user.name "github-actions[bot]"
@@ -51,12 +51,15 @@ jobs:
           if git diff --cached --quiet; then
             echo "version.py 无需变更，跳过写回"
           else
+            git pull --rebase origin main --autostash || git rebase --abort
             git commit -m "chore: sync version ${GITHUB_REF#refs/tags/}"
             git push origin HEAD:main
             echo "已把版本号写回 main"
           fi
 
-      # 创建源码 Release（安装脚本用的源代码 zip），非必须但便于发版留痕
+      # 创建源码 Release（安装脚本用的源代码 zip），非必须但便于发版留痕；
+      # allowUpdates 使同 tag 重跑不失败（配合 bump 幂等），Release 归档包取自写回前的 tag 提交，
+      # 版本号可能略旧，但 install.ps1 从 main zip 取版本，部署无影响，此处仅留痕。
       - name: Create source release
         if: success()
         uses: softprops/action-gh-release@v2
@@ -64,3 +67,4 @@ jobs:
           name: "${{ steps.tag.outputs.tag }}"
           tag_name: "${{ steps.tag.outputs.tag }}"
           generate_release_notes: true
+          allowUpdates: true
