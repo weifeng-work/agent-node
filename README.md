@@ -18,7 +18,7 @@
 
 ## 快速开始
 
-### 方式零：一行命令安装（Windows，推荐给不熟 CLI 的用户）
+### 方式零：一行命令安装（Windows，零依赖，推荐给不熟 CLI 的用户）
 
 在 PowerShell 里粘贴这一行并回车即可：
 
@@ -26,9 +26,14 @@
 irm https://raw.githubusercontent.com/weifeng-work/agent-node/main/scripts/install.ps1 | iex
 ```
 
-脚本会自动检测并补装 Node.js / Python（缺失时用 winget）、按 npm 方式部署到
-`%LOCALAPPDATA%\agent-node`、**创建桌面快捷方式**、**自动启动节点并打开面板**。
-无需任何开发工具或排障经验；失败会输出清晰提示。可选开关：`irm ... | iex -Args "-SkipShortcut -SkipStart"`。
+**不需要 Node / npm / git / 系统 Python**。脚本自动：下载源码 + 下载含内置便携 Python 的
+运行时 zip → 解到 `%LOCALAPPDATA%\agent-node`（app/代码 + python + bin）→ 确保
+`data\`（已存在则原样保留，**重装/更新不丢身份与配置**）→ 生成无 Node 启动壳 →
+**创建桌面快捷方式** → **自动启动节点并打开面板**。
+
+日常控制：双击桌面 `agent-node`，或 `agent-node start|stop|status|restart|update`（纯
+PowerShell 壳，无 Node）。失败会输出清晰提示。可选：`irm ... | iex -Args "-SkipShortcut -SkipStart"`。
+零环境入口与 npm 手动安装双轨并存、共用同一份 `data`。
 
 ### 方式一：npm 安装（手动，Windows）
 
