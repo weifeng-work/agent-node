@@ -114,9 +114,11 @@ python -m tools.cli push-dir --root <目录> --to <node_id> --target inbox/migra
 > 学会使用 agent-node 节点后，告诉我：本机有哪些可用执行器？怎么调用远程智能体？
 
 - **无 MCP、只有命令行的智能体**（用 Bash/终端，没有 get_skill 工具）：
-> 请先读取本机的 skill 说明书文件（Windows 一键安装：`%LOCALAPPDATA%\agent-node\app\skill\SKILL.md`；
-> 源码形态：仓库根 `skill\SKILL.md`），学会使用 agent-node 节点后，告诉我：
-> 本机有哪些可用执行器？怎么调用远程智能体？
+> 请先读取 agent-node 节点的 skill 说明书后告诉我：本机有哪些可用执行器？怎么调用远程智能体？
+> 说明书获取方式（任选）：
+> · 在线直接读：https://raw.githubusercontent.com/weifeng-work/agent-node/main/skill/SKILL.md
+> · 本机已装（Windows 一键安装）：`%LOCALAPPDATA%\agent-node\app\skill\SKILL.md`
+> · 源码形态：本地仓库根 `skill\SKILL.md`
 
 ## MCP 之后如何使用更多功能
 

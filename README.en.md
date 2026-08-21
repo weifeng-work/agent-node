@@ -103,10 +103,12 @@ Send one of these messages to any AI agent; it will read the built-in manual and
 > which executors are available locally? How do I call remote agents?
 
 - **CLI-only agent** (Bash/terminal, no get_skill tool):
-> First read the local skill manual file (Windows one-line install:
-> `%LOCALAPPDATA%\agent-node\app\skill\SKILL.md`; source tree: `skill/SKILL.md` at the
-> repo root), learn how to use the agent-node node, then tell me:
+> First read the agent-node skill manual, then tell me:
 > which executors are available locally? How do I call remote agents?
+> Where to get the manual (any option):
+> · Read it online: https://raw.githubusercontent.com/weifeng-work/agent-node/main/skill/SKILL.md
+> · Already installed (Windows one-line install): `%LOCALAPPDATA%\agent-node\app\skill\SKILL.md`
+> · Source tree: `skill/SKILL.md` at the repo root
 
 ## What you can do after MCP
 
