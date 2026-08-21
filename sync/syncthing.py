@@ -18,7 +18,7 @@ import urllib.error
 from pathlib import Path
 
 FOLDER_ID = "agent-node-sync"
-REST_BASE = "http://127.0.0.1:8384"
+DEFAULT_REST_BASE = "http://127.0.0.1:8384"
 START_TIMEOUT = 60
 
 
@@ -34,11 +34,34 @@ class SyncManager:
         self._proc: subprocess.Popen | None = None
         self._paired: set[str] = set()
         self._lock = threading.Lock()
+        # REST 基址：默认 8384；若 config.xml 里 GUI 端口被改（8384 被占时 syncthing
+        # 会随机换端口并持久化进 config.xml），则跟随实际端口，避免连错端口。
+        self.rest_base = self._read_gui_address() or DEFAULT_REST_BASE
+
+    def _read_gui_address(self) -> str | None:
+        """从 config.xml 读取 GUI 监听地址（127.0.0.1:port），带协议；读不到则返回 None。"""
+        try:
+            cfg = self.home / "config.xml"
+            if not cfg.is_file():
+                return None
+            import re
+            m = re.search(r"<gui[^>]*>.*?<address>([^<]+)</address>", cfg.read_text("utf-8"),
+                          re.S)
+            if not m:
+                return None
+            addr = m.group(1).strip()
+            if not addr:
+                return None
+            if ":" not in addr:
+                addr = f"{addr}:8384"
+            return f"http://{addr}"
+        except Exception:
+            return None
 
     # ---------- REST ----------
     def _rest(self, method: str, path: str, body: dict | None = None,
               timeout: float = 10.0):
-        url = REST_BASE + path
+        url = self.rest_base + path
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("X-API-Key", self.api_key)
