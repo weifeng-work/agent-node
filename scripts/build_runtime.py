@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import shutil
 import subprocess
@@ -32,16 +33,53 @@ RUNTIME_ZIP_NAME = "agent-node-runtime-windows-x64.zip"
 
 
 def _pick_rt_asset(py_ver: str) -> tuple[str, str]:
-    """返回 (url, name)：匹配 py_ver.x 的 x86_64 pc-windows-msvc install_only.tar.gz。"""
+    """返回 (url, name)：匹配 py_ver.x 的 x86_64 pc-windows-msvc install_only 归档。
+
+    python-build-standalone 资产现为 .tar.zst（个别旧版为 .tar.gz），二者都接受。
+    """
     with urllib.request.urlopen(RT_API, timeout=60) as r:
         rel = json.load(r)
+    candidates = []
     for a in rel.get("assets", []):
         n: str = a["name"]
         if (n.startswith(f"{RT_TAG_PREFIX}{py_ver}.")
                 and "x86_64-pc-windows-msvc" in n
-                and n.endswith("install_only.tar.gz")):
-            return a["browser_download_url"], n
-    raise SystemExit(f"未找到 python-build-standalone 匹配 py_ver={py_ver} 的资产")
+                and "install_only" in n):
+            if n.endswith("install_only.tar.zst") or n.endswith("install_only.tar.gz"):
+                candidates.append((n, a["browser_download_url"]))
+    if not candidates:
+        raise SystemExit(f"未找到 python-build-standalone 匹配 py_ver={py_ver} 的 install_only 资产")
+    # 优先 .zst
+    candidates.sort(key=lambda c: 0 if c[0].endswith(".zst") else 1)
+    n, url = candidates[0]
+    return url, n
+
+
+def _zstd_decompress(src: Path, dest_tar: Path) -> None:
+    """把 .tar.zst 解成 dest_tar。需 zstandard（缺失则用驱动 python 安装）。"""
+    try:
+        import zstandard as _z
+    except ImportError:
+        print("  安装 zstandard…")
+        subprocess.run([sys.executable, "-m", "pip", "install",
+                        "zstandard", "--quiet"], check=True)
+        import zstandard as _z
+    with open(src, "rb") as f:
+        reader = _z.ZstdDecompressor().stream_reader(f)
+        with open(dest_tar, "wb") as out:
+            shutil.copyfileobj(reader, out)
+
+
+def _extract_rt_archive(archive: Path, dest: Path, py_ver: str) -> None:
+    """解压 .tar.gz / .tar.zst 便携 Python 归档到 dest。"""
+    if archive.name.endswith(".tar.zst"):
+        tar_path = archive.with_suffix(".tar")  # 去掉 .zst
+        _zstd_decompress(archive, tar_path)
+        src = tar_path
+    else:
+        src = archive
+    with tarfile.open(src) as tar:
+        tar.extractall(dest, filter="data")
 
 
 def _wget(url: str, dest: Path) -> None:
@@ -101,8 +139,7 @@ def main() -> int:
         tarball = tmp / name
         _wget(url, tarball)
         print("  解压便携 Python…")
-        with tarfile.open(tarball, "r:gz") as tar:
-            tar.extractall(tmp, filter="data")
+        _extract_rt_archive(tarball, tmp, a.python_ver)
         pyroot = _extract_incl_pip(tmp)
         _ensure_pip(pyroot)
         _install_deps(pyroot)
