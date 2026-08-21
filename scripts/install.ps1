@@ -1,4 +1,4 @@
-﻿# =====================================================================
+# =====================================================================
 # agent-node 一键安装（无 Node 版）：irm | iex
 #   irm https://raw.githubusercontent.com/weifeng-work/agent-node/main/scripts/install.ps1 | iex
 #
