@@ -601,6 +601,14 @@ class MeshManager:
             base = 49700
         return list(range(base, base + 5))
 
+    def _local_ip_set(self) -> set[str]:
+        """本机所有接口 IP（含虚拟网卡），用于排除自发现。"""
+        try:
+            from transport.beacon import _all_local_ips
+            return set(_all_local_ips())
+        except Exception:
+            return set()
+
     def _announce_probe(self, host: str) -> bool:
         """通告快速通道：拨固定端口读 whoami，拿到真实对等端口后拨 mesh。成功则已建长连。"""
         for ap in self._announce_ports():
@@ -643,6 +651,8 @@ class MeshManager:
         prefixes = self._scan_subnets()
         if not prefixes:
             return
+        # 本机自身 IP：禁止扫描/拨号（否则会把自己当对端，3.x 自发现 bug）
+        local_ips = self._local_ip_set()
         for prefix in sorted(prefixes):
             if self._stopping:
                 return
@@ -650,6 +660,8 @@ class MeshManager:
                 if self._stopping or time.time() > budget_deadline:
                     return
                 host = f"{prefix}.{node_part}"
+                if host in local_ips:
+                    continue  # 不扫描/不连自己
                 if self._has_live_conn_to(host):
                     continue
                 now = time.time()
@@ -695,6 +707,11 @@ class MeshManager:
     def _register(self, conn: Connection) -> None:
         pid = conn.peer_node_id
         if not pid:
+            return
+        if pid == self.my_node_id:
+            # 自我连接：经本机其它网卡/IP 的子网扫描或回环把"自己"当作对端连上。
+            # 必须拒绝登记并关闭，否则节点会在面板上把自己列为在线对端（3.x 自发现 bug）。
+            conn.close("self connection")
             return
         with self._conn_lock:
             old = self.connections.get(pid)
