@@ -34,20 +34,7 @@ irm https://raw.githubusercontent.com/weifeng-work/agent-node/main/scripts/insta
 日常控制：双击桌面 `agent-node`，或任意终端 `agent-node start|stop|status|restart|update`。
 失败会输出清晰提示。可选：`irm ... | iex -Args "-SkipShortcut -SkipStart"`。
 
-### 方式一：npm 安装（手动，Windows）
-
-```bash
-npm install -g @weifeng-work/agent-node
-agent-node
-```
-
-首次运行会自动完成安装（检测 Python → 创建虚拟环境 → 安装依赖 → 配置防火墙），
-约 1-3 分钟。安装完成后启动节点，面板自动打开，并输出 MCP 配置与 AI 引导词。
-
-> 若 npm 提示 `allow-scripts` 警告（新版 npm 默认拦截安装脚本），直接运行
-> `agent-node` 即可——首次运行会自动检测并补装。
-
-### 方式二：源码运行
+### 源码运行
 
 ```bash
 # 前置: Python ≥ 3.10, Windows 10/11
@@ -160,7 +147,6 @@ python -m tools.cli push-dir --root <目录> --to <node_id> --target inbox/migra
 
 ## 前提条件
 
-- **Node.js** ≥ 14（npm 启动器用）
 - **Python** ≥ 3.10（节点本体）
 - **Windows** 10/11（代码含 Linux 路径，未在 Linux 实测）
 

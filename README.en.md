@@ -19,19 +19,17 @@ account, LAN-plaintext only). Any AI agent connected to a node can:
 
 ## Quick start
 
-### Option 1: npm install (recommended, Windows)
+### Option 1: one-line install (recommended, Windows)
 
-```bash
-npm install -g @weifeng-work/agent-node
-agent-node
+```powershell
+irm https://raw.githubusercontent.com/weifeng-work/agent-node/main/scripts/install.ps1 | iex
 ```
 
-First run auto-installs (detect Python → create venv → install deps → configure firewall),
-~1-3 min. Once installed, the web panel opens automatically, and the MCP JSON config plus
-an AI onboarding prompt are printed to the terminal.
-
-> If npm warns about `allow-scripts` (newer npm blocks postinstall by default), just run
-> `agent-node` anyway — it detects the missing install and completes setup on first run.
+No Node / npm / git required. The script detects system Python (≥3.10, installs via winget
+if missing) → downloads the source zip → creates a local `venv` (does not pollute the system)
+→ installs the global `agent-node` command (pure PowerShell, added to user PATH) → creates a
+desktop shortcut → auto-starts the node and opens the panel. Reinstalls/updates keep your
+`data\` (identity & config).
 
 ### Option 2: run from source
 
@@ -137,7 +135,6 @@ No hub. No broker. Pure peer-to-peer. Design & protocol details:
 
 ## Prerequisites
 
-- **Node.js** ≥ 14 (for the npm launcher)
 - **Python** ≥ 3.10 (for the node itself)
 - **Windows** 10/11 (code includes Linux paths, untested on Linux)
 

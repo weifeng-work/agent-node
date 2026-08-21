@@ -1,19 +1,12 @@
-# agent-node 自动发布：打 tag → 构建 → OIDC Trusted Publishing 发布到 npm
+# agent-node 自动发版：打 tag → 把 tag 版本写回 node/version.py → 创建源码 Release
 #
 # 触发方式:
-#   git tag v0.1.1 && git push --tags
-#   或 GitHub → Releases → 选 "v0.1.1" tag → Publish release
+#   git tag v0.2.0 && git push --tags
 #
-# 无需任何 npm token —— 用 GitHub OIDC 身份直接与 npm 交换短期凭证（Trusted Publishing）。
-# 前提: 需在 npmjs.com 给本包配置 Trusted Publisher，绑定：
-#   Owner = weifeng-work / Repository = agent-node / Workflow = agent-node-release.yml
-#
-# 注意:
-#   - 不要给 actions/setup-node 传 registry-url（会写 .npmrc 的 token 行，与 OIDC 冲突）
-#   - 必须声明 permissions.id-token: write 才能交换 OIDC token
-#   - npm >= 11.5.1、Node >= 22.14（由 setup-node 提供）
+# 不再发布 npm（安装走 irm|iex 源码 zip / 源码运行，见 README）。tag 是唯一版本事实来源
+# （node/version.py 注释与 VERSIONS.md 约定）；本 workflow 发版时把 tag 版本写回 version.py
+# 并提交回 main（main-zip 部署形态无 .git，只能读 VERSION 常量，故需要此同步）。
 name: agent-node release
-
 on:
   push:
     tags:
@@ -21,11 +14,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  id-token: write   # OIDC 必需
+  contents: write   # 写回 main + 创建 Release
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,16 +30,37 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          # 不设 registry-url：避免写入 NODE_AUTH_TOKEN 到 .npmrc，OIDC 会与之冲突
-
-      # 解析当前 tag 版本号，传给发布脚本
-      - name: Get tag version
+      - name: Resolve tag version
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Release to npm (OIDC)
-        run: bash scripts/release.sh "${{ steps.tag.outputs.tag }}"
+      # 切回 main（tag 是 detached HEAD；写回必须基于 main，避免非快进被拒）
+      - name: Switch to main
+        run: git checkout main
+
+      # 把 tag 版本写入 node/version.py（纯 Python，无 npm）
+      - name: Bump version.py
+        run: python3 scripts/bump_version.py "${{ steps.tag.outputs.tag }}"
+
+      # 写回 main：main-zip 部署形态读取该常量显示版本
+      - name: Commit version back to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add node/version.py
+          if git diff --cached --quiet; then
+            echo "version.py 无需变更，跳过写回"
+          else
+            git commit -m "chore: sync version ${GITHUB_REF#refs/tags/}"
+            git push origin HEAD:main
+            echo "已把版本号写回 main"
+          fi
+
+      # 创建源码 Release（安装脚本用的源代码 zip），非必须但便于发版留痕
+      - name: Create source release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ steps.tag.outputs.tag }}"
+          tag_name: "${{ steps.tag.outputs.tag }}"
+          generate_release_notes: true

@@ -22,6 +22,5 @@ env/
 deploy.tgz
 data/
 
-# npm 构建产物（build_npm.py 由 bin/ + 源码再生）
-npm-dist/app/
-npm-dist/*.tgz
+# 旧分发残留目录（不再使用，忽略以防误跟踪）
+npm-dist/

@@ -2,8 +2,9 @@
 
 - 源码形态（目录含 .git）：用 `git describe --tags --abbrev=0` 自动跟随最新 tag，
   避免手工改本文件导致与发版 tag 漂移。
-- 部署形态（npm 发布副本，无 .git）：用下方 VERSION 常量。
-  release.sh 在发版时按 tag 自动把该常量覆盖为 tag（去前导 v），再随 app/ 一并部署。
+- 部署形态（codeload 源码 zip，无 .git）：用下方 VERSION 常量。
+  发版（GitHub Actions）时由 scripts/bump_version.py 按 tag 自动把该常量覆盖为
+  tag（去前导 v），再提交回 main——install.ps1 从 main 拉取，故该常量始终是最新版本。
 
 面板顶部与命令行启动（python -m node.main）均从本模块取版本号。
 """
@@ -12,7 +13,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-# release.sh 发版时自动覆盖为 tag（去掉前缀 v）；本地源码形态则被 git describe 覆盖
+# bump_version.py 发版时自动覆盖为 tag（去掉前缀 v）；本地源码形态则被 git describe 覆盖
 VERSION = "0.1.10"
 
 

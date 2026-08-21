@@ -1,9 +1,9 @@
 # 依赖版本锁定 / Dependency Version Lock
 
 > 本文件是构建的一级真相来源。任何版本变更请在此登记后，
-> 同步修改 `requirements.txt` / `npm-dist` 及 README。
+> 同步修改 `requirements.txt` 及 README。
 > This file is the source of truth for the build. Any version change
-> must be logged here and reflected in `requirements.txt` / `npm-dist` & README.
+> must be logged here and reflected in `requirements.txt` & README.
 
 ## Python 依赖（requirements.txt，~= 锁定）
 
@@ -24,12 +24,12 @@
 
 ## 预编译二进制（packaged binaries）
 
-随 npm/dist 分发。`psyttmux` 版本经 `--version` 核验。
+随源码 `bin/` 分发，由 install.ps1 / 源码部署复制到运行目录。`psyttmux` 版本经 `--version` 核验。
 
 | 二进制 | 大小 | 版本 | 来源 | 存放 | 是否入 Git | 用途 |
 |---|---|---|---|---|---|---|
-| syncthing.exe | 25.7 MB | v1.29.4 "Gold Grasshopper" (go1.24.1 win-amd64) | syncthing.net 官方发布 | `bin/` + `npm-dist/app/data_synth/syncthing/` | ✅ | 文件夹同步引擎（MPL-2.0） |
-| psmux.exe | 6.8 MB | tmux 3.3.8 | 项目维护者发布 | `bin/` + `npm-dist/app/bin/` | ⚠️ (计划) | 多窗格 TUI / 可见弹窗 |
+| syncthing.exe | 25.7 MB | v1.29.4 "Gold Grasshopper" (go1.24.1 win-amd64) | syncthing.net 官方发布 | `bin/` | ✅ | 文件夹同步引擎（MPL-2.0） |
+| psmux.exe | 6.8 MB | tmux 3.3.8 | 项目维护者发布 | `bin/` | ⚠️ (计划) | 多窗格 TUI / 可见弹窗 |
 | pmux.exe | 6.8 MB | tmux 3.3.8 | 同上 | 同上 | ⚠️ (计划) | psmux 别名 |
 | tmux.exe | 6.8 MB | tmux 3.3.8 | 原生 tmux win32 构建 | 同上 | ⚠️ (计划) | 终端多路复用器 |
 
