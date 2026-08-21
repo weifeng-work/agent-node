@@ -106,9 +106,16 @@ python -m tools.cli push-dir --root <目录> --to <node_id> --target inbox/migra
 
 ### 让任何 AI 自动驾驶本节点
 
-把下面这句话发给任意智能体，它会读取节点内置说明书后指导你：
+把下面这句话发给任意智能体，它会读取节点内置说明书后指导你（以下两种说法覆盖不同
+接入方式，发给智能体时按它的能力选一种）：
 
-> 请加载 skill/SKILL.md 说明书，学会使用 agent-node 节点后，告诉我：
+- **MCP 接入的智能体**（连了这个节点的 MCP，能调 `get_skill` 工具）：
+> 请用工具的 `get_skill`（可带参数 doc=）读取节点内置说明书 skill/SKILL.md，
+> 学会使用 agent-node 节点后，告诉我：本机有哪些可用执行器？怎么调用远程智能体？
+
+- **无 MCP、只有命令行的智能体**（用 Bash/终端，没有 get_skill 工具）：
+> 请先读取本机的 skill 说明书文件（Windows 一键安装：`%LOCALAPPDATA%\agent-node\app\skill\SKILL.md`；
+> 源码形态：仓库根 `skill\SKILL.md`），学会使用 agent-node 节点后，告诉我：
 > 本机有哪些可用执行器？怎么调用远程智能体？
 
 ## MCP 之后如何使用更多功能

@@ -94,10 +94,19 @@ python -m tools.cli push-dir --root <dir> --to <node_id> --target inbox/migrated
 
 ### Have any AI drive this node
 
-Send this message to any AI agent; it will read the built-in manual and guide you:
+Send one of these messages to any AI agent; it will read the built-in manual and guide you
+(pick the one matching how the agent connects):
 
-> Please load the skill/SKILL.md manual, then tell me:
-> what executors are available? How to call remote agents?
+- **MCP-connected agent** (has the `get_skill` tool):
+> Use the `get_skill` tool (optionally with doc=) to read the node's built-in manual
+> skill/SKILL.md, learn how to use the agent-node node, then tell me:
+> which executors are available locally? How do I call remote agents?
+
+- **CLI-only agent** (Bash/terminal, no get_skill tool):
+> First read the local skill manual file (Windows one-line install:
+> `%LOCALAPPDATA%\agent-node\app\skill\SKILL.md`; source tree: `skill/SKILL.md` at the
+> repo root), learn how to use the agent-node node, then tell me:
+> which executors are available locally? How do I call remote agents?
 
 ## What you can do after MCP
 
