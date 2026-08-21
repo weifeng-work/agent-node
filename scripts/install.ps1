@@ -56,6 +56,36 @@ function Refresh-Path {
 function Extract-Zip([string]$zipPath, [string]$destDir) {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destDir)
 }
+# 流式下载：分块读流并输出字节/百分比进度（反之为大文件静默卡住）
+function Download-File([string]$uri, [string]$outPath) {
+    $req = [System.Net.HttpWebRequest]::Create($uri)
+    $req.Timeout = 120000
+    $req.Method = 'GET'
+    $resp = $req.GetResponse()
+    $total = $resp.ContentLength
+    $in  = $resp.GetResponseStream()
+    $fs  = [System.IO.File]::Create($outPath)
+    try {
+        $buf = New-Object byte[] 65536
+        $got = 0L
+        $lastPct = -1
+        while (($read = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+            $fs.Write($buf, 0, $read)
+            $got += $read
+            if ($total -gt 0) {
+                $pct = [int][math]::Floor($got * 100 / $total)
+                if ($pct -ne $lastPct -and ($pct % 5 -eq 0 -or $pct -eq 100)) {
+                    Write-Host ("`r  {0} / {1} MB ({2}%)" -f
+                        [math]::Round($got / 1MB, 1), [math]::Round($total / 1MB, 1), $pct) -NoNewline
+                    $lastPct = $pct
+                }
+            }
+        }
+        if ($total -gt 0) { Write-Host "" }
+    } finally {
+        $fs.Close(); $in.Close(); $resp.Close()
+    }
+}
 
 # ---------- 1/8 Python ----------
 Step 1 "检查 Python（需要 >= 3.10；缺失则 winget 自动装）"
@@ -81,7 +111,8 @@ try {
     $srcZip = Join-Path $tmp "src.zip"
     $srcEx  = Join-Path $tmp "src"
     Write-Host ("  下载: " + $SRC_URL)
-    Invoke-WebRequest -Uri $SRC_URL -OutFile $srcZip -UseBasicParsing -TimeoutSec 120
+    Download-File $SRC_URL $srcZip
+    Write-Host "  下载完成，解压源码…"
     New-Item -ItemType Directory -Path $srcEx | Out-Null
     Extract-Zip $srcZip $srcEx
     $sub = Get-ChildItem -Path $srcEx -Directory | Select-Object -First 1
@@ -97,9 +128,11 @@ try {
     $venvPy = Join-Path $VENV "Scripts\python.exe"
     if (-not (Test-Path $venvPy)) { & $py -m venv $VENV }
     if ($LASTEXITCODE -ne 0) { Abort "创建 venv 失败。" }
-    & $venvPy -m pip install --upgrade pip --quiet --disable-pip-version-check
-    & $venvPy -m pip install -r $req --quiet --disable-pip-version-check
+    Write-Host "  虚拟环境就绪，正在安装依赖（首次需下载，视网速约 1-3 分钟）…" -ForegroundColor Yellow
+    & $venvPy -m pip install --upgrade pip --disable-pip-version-check
+    & $venvPy -m pip install -r $req --disable-pip-version-check
     if ($LASTEXITCODE -ne 0) { Abort "安装依赖失败（请检查网络）。" }
+    Write-Host "  依赖安装完成。" -ForegroundColor Green
 
     # ---------- 4/8 data ----------
     Step 4 "确保数据目录（保留已有身份/配置）"
