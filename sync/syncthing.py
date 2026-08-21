@@ -52,10 +52,27 @@ class SyncManager:
     def start(self) -> None:
         self.home.mkdir(parents=True, exist_ok=True)
         self.sync_dir.mkdir(parents=True, exist_ok=True)
+        # 首启自部署：data/syncthing/ 缺二进制时，从部署目录自动复制
+        # （2.4.7 二进制随包分发；install.ps1 源码 zip 不内嵌 exe，故启动时兜底部署。
+        #   部署 bin 目录约定 = data_dir 同级 bin/，见 node/core.py:88 对随包二进制的定位）
         if not self.bin.is_file():
-            self.node_core.log("warning",
-                               f"同步引擎未启用: 缺少二进制 {self.bin}（2.4.7 随包分发）")
-            return
+            candidates = [self.node_core.data_dir.parent / "bin" / self.bin.name]
+            deployed = None
+            for c in candidates:
+                if c.is_file():
+                    deployed = c
+                    break
+            if deployed is None:
+                self.node_core.log("warning",
+                                   f"同步引擎未启用: 缺少二进制 {self.bin}（部署目录亦未找到）")
+                return
+            import shutil
+            try:
+                shutil.copy2(deployed, self.bin)
+                self.node_core.log("info", f"同步二进制已从 {deployed} 部署到 {self.bin}")
+            except OSError as e:
+                self.node_core.log("warning", f"同步二进制部署失败: {e}（{self.bin}）")
+                return
         # API key（固定生成一次，写 home/.apikey）
         key_file = self.home / ".apikey"
         if key_file.exists():
