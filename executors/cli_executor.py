@@ -49,46 +49,55 @@ class CliExecutorPlugin(ExecutorPlugin):
     def submit(self, task: TaskInput) -> SubmitResult:
         work_dir = task.result_file.parent
         work_dir.mkdir(parents=True, exist_ok=True)
+        # 提示词先写文件，命令经 stdin 文件重定向读取：非交互 CLI 多在启动即消费 stdin，
+        # 文件重定向可确定性送达，规避 send-keys 定时注入的竞态（提示词可能在 CLI 已
+        # 读完 stdin 后才键入而丢失）。
+        prompt_file = work_dir / f"prompt_{task.task_id}.txt"
+        try:
+            prompt_file.write_text(task.prompt, encoding="utf-8")
+        except OSError as e:
+            return SubmitResult(False, "agent_error", f"写提示词文件失败: {e}")
         with self._lock:
             self._inflight += 1
         try:
-            if shutil.which("psmux"):
-                # psmux 可见窗口（detached 会话 + attach 由人工/后续版本触发）
-                cmd = f'psmux new-session -d -s agn_{task.task_id[:8]} -- cmd /c "{self.command} & timeout /t {DWELL_SECONDS} >nul"'
+            use_psmux = bool(shutil.which("psmux"))
+            session = "agn_" + task.task_id.replace("-", "")
+            inner = (f'{self.command} < "{prompt_file.name}" '
+                     f'& timeout /t {DWELL_SECONDS} >nul')
+            if use_psmux:
+                # psmux 可见窗口（detached 会话）：会话内 cmd /c 运行命令并读 prompt 文件
+                cmd = f'psmux new-session -d -s {session} -- cmd /c "{inner}"'
                 creationflags = subprocess.CREATE_NO_WINDOW
-                shell = True
             else:
                 # Windows 降级：独立可见控制台窗口
-                cmd = f"{self.command} & timeout /t {DWELL_SECONDS} >nul"
+                cmd = inner
                 creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-                shell = True
             try:
                 proc = subprocess.Popen(
-                    cmd, shell=shell, cwd=str(work_dir),
-                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    cmd, shell=True, cwd=str(work_dir),
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     creationflags=creationflags,
                 )
             except OSError as e:
                 return SubmitResult(False, "agent_error", f"拉起 CLI 进程失败: {e}")
-            # 提示词经 stdin 注入（防 argv 换行截断）
-            try:
-                proc.stdin.write(task.prompt.encode("utf-8"))
-                proc.stdin.close()
-            except OSError:
-                pass
-            threading.Thread(target=self._wait, args=(proc, task.task_id),
+            threading.Thread(target=self._wait, args=(proc, task.task_id, prompt_file),
                              daemon=True).start()
             return SubmitResult(True)
         finally:
             pass
 
-    def _wait(self, proc, task_id: str) -> None:
+    def _wait(self, proc, task_id: str, prompt_file: Path) -> None:
         try:
             proc.wait(timeout=max(60, int(self.entry.get("max_run_sec") or 1800)))
         except Exception:
             pass
         finally:
+            # 清理提示词临时文件，避免跨任务残留累积
+            try:
+                prompt_file.unlink(missing_ok=True)
+            except OSError:
+                pass
             with self._lock:
                 self._inflight -= 1
 

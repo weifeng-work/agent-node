@@ -176,9 +176,11 @@ def main() -> int:
             "target_node_id": a.node, "command": "agent-node update",
             "timeout": a.timeout})
         out(r)
-        if r.get("ok") or (r.get("output") or "").strip():
-            print("\n更新命令已送达，目标节点将拉取 npm 最新代码并重部署。")
+        if r.get("ok"):
+            print("\n更新命令已送达，目标节点将拉取最新代码并重部署。")
             print("生效需目标节点手动执行: agent-node restart")
+        else:
+            print("\n更新命令执行失败，请检查目标节点状况。")
     elif a.cmd == "anchor":
         if a.action == "list":
             out(call("GET", "/api/anchors"))

@@ -330,7 +330,8 @@ def dispatch_tool(name: str, args: dict) -> str:
             "mode": a.get("mode") or "async", "attachments": a.get("attachments"),
             "timeout": a.get("timeout") or 600, "task_id": a.get("task_id")})
     elif name == "get_task_result":
-        r = panel_call("GET", f"/api/task/result?task_id={a['task_id']}")
+        r = panel_call("GET", "/api/task/result?task_id="
+                              f"{urllib.parse.quote(a['task_id'])}")
     elif name in ("check_mail", "check_inbox"):
         r = panel_call("GET", "/api/mailbox")
     elif name in ("mail_all", "inbox_all"):
@@ -377,7 +378,7 @@ def dispatch_tool(name: str, args: dict) -> str:
                        {"switch": a["switch"], "enabled": a["enabled"]})
     elif name == "set_run_as_admin":
         r = panel_call("POST", "/api/settings/admin",
-                       {"enabled": a.get("enabled") is True})
+                       {"enabled": bool(a.get("enabled"))})
     elif name == "shell_exec":
         r = panel_call("POST", "/api/shell", {
             "target_node_id": a.get("target_node") or None,

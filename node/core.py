@@ -338,7 +338,9 @@ class NodeCore:
     def _known_peer_hosts(self) -> set[str]:
         """已知对端 host IP 集合（beacon 定向单播目标）——仅在线连接 + 锚点。"""
         hosts: set[str] = set()
-        for addr in self.mesh._known_addrs.values():
+        with self.mesh._conn_lock:
+            addrs = list(self.mesh._known_addrs.values())
+        for addr in addrs:
             if addr and addr[0]:
                 hosts.add(addr[0])
         # 锚点 host 也是 beacon 定向单播目标（被隔离方即使收不到广播也能收到锚点单播）
@@ -407,8 +409,11 @@ class NodeCore:
 
     def _online_candidates(self) -> list[dict]:
         """在线/近期活跃对端集合（仅在线模式：离线节点即消失，不落库恢复）。"""
-        live = {pid for pid, c in self.mesh.connections.items()
-                if c.alive and c.handshake_done}
+        live = set()
+        with self.mesh._conn_lock:
+            for pid, c in self.mesh.connections.items():
+                if c.alive and c.handshake_done:
+                    live.add(pid)
         with self._lock:
             cand = set(live) | set(self._last_beacon.keys())
             host_by_id = {}
@@ -422,8 +427,11 @@ class NodeCore:
 
     def _prune_stale_meta(self) -> None:
         """清理长期无信标且未连接的离线节点元数据/状态（防无界堆积）。"""
-        live = {pid for pid, c in self.mesh.connections.items()
-                if c.alive and c.handshake_done}
+        live = set()
+        with self.mesh._conn_lock:
+            for pid, c in self.mesh.connections.items():
+                if c.alive and c.handshake_done:
+                    live.add(pid)
         cutoff = time.time() - STALE_META_SEC
         with self._lock:
             stale = [nid for nid, ts in list(self._last_beacon.items())
@@ -1000,6 +1008,12 @@ class NodeCore:
         lp = Path(local_path)
         if not lp.is_file():
             return {"ok": False, "error": "agent_error", "detail": f"本地文件不存在: {lp}"}
+        if target_path and any(seg == ".." for seg in
+                               target_path.replace("\\", "/").split("/")):
+            return {"ok": False, "error": "agent_error", "detail": "目标路径含 .. 非法"}
+        # 拒绝绝对路径落盘：本机分支会直接采用绝对 target 而越出 data_dir
+        if target_path and Path(target_path).is_absolute():
+            return {"ok": False, "error": "agent_error", "detail": "目标路径必须为相对路径"}
         if not node_id or node_id == self.node_id:
             # 本机推送：直接落目标路径（默认统一收件目录，2.4.2）
             dest = Path(target_path) if target_path else (self.config.inbox_dir() / lp.name)

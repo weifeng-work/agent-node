@@ -106,8 +106,10 @@ def create_app(core) -> FastAPI:
         """面板下载: pull 到本机收件目录后返回内容（单文件流式）。"""
         import urllib.parse
         result = core.file_pull(node_id, path)
-        if not result.get("ok"):
-            return JSONResponse(result, status_code=200)
+        if not result.get("ok") or not result.get("path"):
+            return JSONResponse({"ok": False, "error": "agent_error",
+                                 "detail": result.get("detail") or "无法下载"},
+                                status_code=200)
         return FileResponse(result["path"], filename=Path(path).name)
 
     @app.post("/api/files/upload")
@@ -118,6 +120,9 @@ def create_app(core) -> FastAPI:
         name = request.headers.get("X-File-Name") or "upload.bin"
         import urllib.parse
         name = urllib.parse.unquote(name)
+        if not name or "/" in name or "\\" in name or name in (".", ".."):
+            return {"ok": False, "error": "agent_error",
+                    "detail": "文件名不能含路径分隔符或为空"}
         if any(ord(c) < 0x20 for c in name + rel + target_dir):
             return {"ok": False, "error": "agent_error",
                     "detail": "路径含非法控制字符"}
@@ -130,6 +135,12 @@ def create_app(core) -> FastAPI:
         tmp.write_bytes(data)
         base = (target_dir or "").strip().rstrip("/\\")
         rel_clean = (rel or name).replace("\\", "/").strip("/")
+        # 拒绝绝对路径根前缀：前导 / 会越出 data_dir（本地 file_push 对绝对路径直接采用）
+        if base.startswith("/") or rel_clean.startswith("/"):
+            return {"ok": False, "error": "agent_error", "detail": "目标路径必须为相对路径"}
+        # 目标相对路径含 .. 段会越界（本地 file_push resolve 或远端落盘），一并拒绝
+        if any(seg == ".." for seg in (base + "/" + rel_clean).strip("/").split("/")):
+            return {"ok": False, "error": "agent_error", "detail": "目标路径含 .. 非法"}
         # 浏览在根目录（盘符视图）时落到统一收件目录（2.4.2 默认值）
         target = f"{base}/{rel_clean}" if base else f"inbox/{rel_clean}"
         try:
@@ -176,7 +187,7 @@ def create_app(core) -> FastAPI:
             body.get("executor_id") or "", body.get("prompt") or "",
             mode=body.get("mode") or "async",
             attachments=body.get("attachments"),
-            timeout=float(body.get("timeout") or 600),
+            timeout=float(body["timeout"]) if body.get("timeout") is not None else 600.0,
             task_id=body.get("task_id"),
             caller_id=caller_id(request))
 
@@ -308,6 +319,10 @@ def create_app(core) -> FastAPI:
             return {"ok": False, "error": "agent_error", "detail": "空文件"}
         rel = request.query_params.get("rel") or name
         rel = urllib.parse.unquote(rel).replace("\\", "/").strip("/")
+        if (not rel or any(seg in (".", "..", "") for seg in rel.split("/"))
+                or ":" in rel):
+            return {"ok": False, "error": "agent_error",
+                    "detail": "同步相对路径非法（不允许 .. 穿越/盘符）"}
         dest = core.data_dir / "sync" / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)

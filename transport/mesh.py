@@ -481,8 +481,8 @@ class MeshManager:
                 return c
             if node_id in self._connecting:
                 return None
+            self._known_addrs[node_id] = (host, int(port))
             self._connecting.add(node_id)
-        self._known_addrs[node_id] = (host, int(port))
         try:
             return self.connect(host, int(port))
         finally:
