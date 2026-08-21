@@ -4,6 +4,7 @@
 #
 # 不依赖 Node / npm / git。只要求系统有 Python>=3.10（没有则 winget 自动装一次），
 # 依赖装进本地 venv，不污染系统。源码来自 GitHub 源码 zip。
+# 国内加速：源码下载直连不可达时自动切换 GitHub 加速镜像；pip 官方源失败自动用清华源重试。
 # 产物（%LOCALAPPDATA%\agent-node\）：
 #   app\       代码
 #   venv\      Python 虚拟环境 + 依赖
@@ -24,11 +25,46 @@ $ROOT    = Join-Path $env:LOCALAPPDATA "agent-node"
 $APP     = Join-Path $ROOT "app"
 $VENV    = Join-Path $ROOT "venv"
 $DATA    = Join-Path $ROOT "data"
-$SRC_URL = "https://codeload.github.com/weifeng-work/agent-node/zip/refs/heads/main"
+# 源码下载源：优先官方 codeload；直连不稳时自动用国内加速镜像（URL 前缀代理）。
+# 镜像为社区公益服务，随时可能下线，故探测选第一个可用的。
+$SRC_MIRRORS = @(
+    "https://codeload.github.com/weifeng-work/agent-node/zip/refs/heads/main",
+    "https://ghproxy.cn/https://codeload.github.com/weifeng-work/agent-node/zip/refs/heads/main",
+    "https://ghproxy.net/https://codeload.github.com/weifeng-work/agent-node/zip/refs/heads/main",
+    "https://ghfast.top/https://codeload.github.com/weifeng-work/agent-node/zip/refs/heads/main",
+    "https://gh-proxy.com/https://codeload.github.com/weifeng-work/agent-node/zip/refs/heads/main"
+)
+$PIP_MIRRORS = @(
+    "https://pypi.org/simple",
+    "https://pypi.tuna.tsinghua.edu.cn/simple"
+)
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 function Step([int]$n, [string]$msg) { Write-Host ""; Write-Host ("[{0}/8] {1}" -f $n, $msg) -ForegroundColor Cyan }
+# 轻量连通探测：返回指定 URL 是否可达（5s 超时，不发实际大下载）。
+# codeload/镜像对 HEAD 可能返回 405，故用 GET + 读一字节就断开。
+function Test-Url([string]$uri) {
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($uri)
+        $req.Method = 'GET'
+        $req.Timeout = 5000
+        $req.ReadWriteTimeout = 5000
+        $resp = $req.GetResponse()
+        $stream = $resp.GetResponseStream()
+        $one = New-Object byte[] 1
+        if ($stream.CanRead) { $null = $stream.Read($one, 0, 1) }
+        $stream.Close(); $resp.Close()
+        return $true
+    } catch { return $false }
+}
+# 从候选列表里挑选第一个可达的下载源（官方在前，镜像兜底）
+function Select-Source([string[]]$candidates) {
+    foreach ($u in $candidates) {
+        if (Test-Url $u) { Write-Host ("  使用源: " + $u); return $u }
+    }
+    return $candidates[0]  # 全部探测失败时仍用官方源，让真正的下载报错给用户看
+}
 function Abort([string]$msg) {
     Write-Host ""; Write-Host ("[安装失败] " + $msg) -ForegroundColor Red
     Write-Host "把上面日志复制发给任意 AI 助手即可帮你排查。" -ForegroundColor Yellow
@@ -110,8 +146,10 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
     $srcZip = Join-Path $tmp "src.zip"
     $srcEx  = Join-Path $tmp "src"
-    Write-Host ("  下载: " + $SRC_URL)
-    Download-File $SRC_URL $srcZip
+    Write-Host "  探测下载源（直连不可达则自动切换国内镜像）…"
+    $srcUrl = Select-Source $SRC_MIRRORS
+    Write-Host ("  下载: " + $srcUrl)
+    Download-File $srcUrl $srcZip
     Write-Host "  下载完成，解压源码…"
     New-Item -ItemType Directory -Path $srcEx | Out-Null
     Extract-Zip $srcZip $srcEx
@@ -129,10 +167,21 @@ try {
     if (-not (Test-Path $venvPy)) { & $py -m venv $VENV }
     if ($LASTEXITCODE -ne 0) { Abort "创建 venv 失败。" }
     Write-Host "  虚拟环境就绪，正在安装依赖（首次需下载，视网速约 1-3 分钟）…" -ForegroundColor Yellow
-    & $venvPy -m pip install --upgrade pip --disable-pip-version-check
-    & $venvPy -m pip install -r $req --disable-pip-version-check
-    if ($LASTEXITCODE -ne 0) { Abort "安装依赖失败（请检查网络）。" }
-    Write-Host "  依赖安装完成。" -ForegroundColor Green
+    # pip 升级与装依赖：官方源失败时自动改用国内镜像重试
+    $pipIndex = $PIP_MIRRORS[0]
+    foreach ($attempt in $PIP_MIRRORS) {
+        $ok = $true
+        & $venvPy -m pip install --upgrade pip --index-url $attempt --disable-pip-version-check 2>$null
+        if ($LASTEXITCODE -ne 0) { $ok = $false }
+        if ($ok) {
+            & $venvPy -m pip install -r $req --index-url $attempt --disable-pip-version-check
+            if ($LASTEXITCODE -ne 0) { $ok = $false }
+        }
+        if ($ok) { $pipIndex = $attempt; break }
+        Write-Host ("  源 " + $attempt + " 失败，尝试下一条…") -ForegroundColor Yellow
+    }
+    if ($LASTEXITCODE -ne 0) { Abort "安装依赖失败（请检查网络，必要时可自行配置国内 pip 镜像）。" }
+    Write-Host ("  依赖安装完成（源: " + $pipIndex + "）") -ForegroundColor Green
 
     # ---------- 4/8 data ----------
     Step 4 "确保数据目录（保留已有身份/配置）"
