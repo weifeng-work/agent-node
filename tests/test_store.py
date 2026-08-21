@@ -109,18 +109,6 @@ class TestStore(unittest.TestCase):
         self.assertEqual(n, 1)
         self.assertEqual(len(self.store.fetch_mail("c1")), 1)  # 未读保留
 
-    def test_known_peers_upsert_offline_persist(self):
-        """2.1.9: 已知节点持久化、离线不消失。"""
-        self.store.upsert_peer("node-a", name="A", team_id="", host="1.2.3.4",
-                               peer_tcp_port=40001)
-        self.store.upsert_peer("node-a", name="A2", team_id="t1")
-        peers = self.store.peers()
-        self.assertEqual(len(peers), 1)
-        self.assertEqual(peers[0]["name"], "A2")
-        self.assertEqual(peers[0]["team_id"], "t1")
-        self.store.delete_peer("node-a")
-        self.assertEqual(len(self.store.peers()), 0)
-
     def test_chat_history_and_conversations(self):
         self.store.add_chat("node-b", "out", "hello")
         self.store.add_chat("node-b", "in", "world")

@@ -42,14 +42,6 @@ def create_app(core) -> FastAPI:
     def nodes():
         return {"ok": True, "nodes": core.list_nodes()}
 
-    @app.post("/api/nodes/forget")
-    async def forget_node(body: dict):
-        return core.forget_node(body.get("node_id") or "")
-
-    @app.post("/api/nodes/purge")
-    async def purge_node(body: dict):
-        return core.purge_node(body.get("node_id") or "")
-
     @app.post("/api/peers/add_manual")
     async def add_manual(body: dict):
         return core.add_manual_peer(body.get("host") or "",

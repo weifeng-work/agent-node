@@ -5,7 +5,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [ValidateSet("start","stop","status","restart","update","help")]
+    [ValidateSet("start","stop","status","restart","update","mcp","help")]
     [string]$Action = "start"
 )
 $ErrorActionPreference = "Stop"
@@ -68,6 +68,27 @@ function Get-VenvSitePackages {
     return ""
 }
 
+function Show-McpConfig {
+    $venvPy = Join-Path $ROOT "venv\Scripts\python.exe"
+    $panel = Get-PanelUrl
+    $cf = ($APP -replace '\\','/')
+    $cp = ($venvPy -replace '\\','/')
+    Write-Host "把下面 JSON 加到你的 AI 客户端 MCP 配置："
+    Write-Host ""
+    Write-Host ('{')
+    Write-Host ('  "mcpServers": {')
+    Write-Host ('    "agent-node": {')
+    Write-Host ('      "command": "' + $cp + '",')
+    Write-Host ('      "args": ["-m", "mcp.server"],')
+    Write-Host ('      "cwd": "' + $cf + '",')
+    Write-Host ('      "env": { "AGENT_NODE_PANEL": "' + $panel + '" }')
+    Write-Host ('    }')
+    Write-Host ('  }')
+    Write-Host ('}')
+    Write-Host ""
+    Write-Host "提示：command 一定是 venv 里的 python（依赖装在那里），不是系统 python。"
+}
+
 function Start-Node {
     if (Is-Running) { Write-Host "节点已在运行，打开面板…"; Open-Panel; return }
     if (-not (Test-Path $PYW)) {
@@ -122,5 +143,6 @@ switch ($Action) {
     "status"  { Show-Status }
     "restart" { Stop-Node; Start-Sleep -Seconds 1; Start-Node }
     "update"  { Update-Node }
-    default   { Write-Host "用法: agent-node start|stop|status|restart|update" }
+    "mcp"     { Show-McpConfig }
+    default   { Write-Host "用法: agent-node start|stop|status|restart|update|mcp" }
 }

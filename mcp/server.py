@@ -155,10 +155,6 @@ TOOLS = [
     # ② 节点
     {"name": "list_nodes", "description": "在线节点列表（node_id+名称+team+能力+开关+地址，仅显示当前在线对端）",
      "inputSchema": _s({})},
-    {"name": "forget_node", "description": "忘记节点（从已知列表移除，保留聊天记录）",
-     "inputSchema": _s({"node_id": {"type": "string"}}, ["node_id"])},
-    {"name": "purge_node", "description": "彻底删除死节点（节点记录+聊天记录，审计日志保留；在线节点拒绝）",
-     "inputSchema": _s({"node_id": {"type": "string"}}, ["node_id"])},
     {"name": "add_manual_peer", "description": "手动指定节点加入（跨网段兜底，被加方需固定 peer_tcp_port）",
      "inputSchema": _s({"host": {"type": "string"}, "peer_tcp_port": {"type": "integer"}},
                        ["host", "peer_tcp_port"])},
@@ -280,10 +276,6 @@ def dispatch_tool(name: str, args: dict) -> str:
         r = panel_call("POST", "/api/node/restart", {})
     elif name == "list_nodes":
         r = panel_call("GET", "/api/nodes")
-    elif name == "forget_node":
-        r = panel_call("POST", "/api/nodes/forget", {"node_id": a["node_id"]})
-    elif name == "purge_node":
-        r = panel_call("POST", "/api/nodes/purge", {"node_id": a["node_id"]})
     elif name == "add_manual_peer":
         r = panel_call("POST", "/api/peers/add_manual",
                        {"host": a["host"], "peer_tcp_port": a["peer_tcp_port"]})

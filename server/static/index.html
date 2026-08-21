@@ -665,14 +665,6 @@ async function refreshNodes() {
       .map(n => `<option value="${esc(n.nodeId)}">${esc(n.name)}</option>`).join("");
   } catch (e) {}
 }
-async function purgeNode(id) {
-  if (!confirm("彻底删除该节点？\n将清除其节点记录与聊天记录（审计日志保留）；在线节点不可删除。")) return;
-  const r = await api("/api/nodes/purge", { method: "POST", body: JSON.stringify({ node_id: id })});
-  if (r.ok) toast("已彻底删除"); else toast(r.detail || "删除失败", true);
-  refreshNodes();
-  if (state.currentChat === id) { state.currentChat = null; }
-  loadConversations();
-}
 async function addManualPeer() {
   const host = $("#mp-host").value.trim(), port = parseInt($("#mp-port").value) || 0;
   if (!host || !port) return toast("请填写 host 与端口", true);
@@ -749,8 +741,6 @@ async function loadConversations() {
       : `<span class="hint">${online ? "在线" : "已知节点"} · 未开始聊天</span>`;
     return `<div class="conv ${state.currentChat === c.peer_node_id ? "active" : ""}"
       onclick="openChat('${esc(c.peer_node_id)}')">
-      <button class="btn small danger conv-del" ${online ? "disabled title=\"在线节点不可删除\"" : ""}
-        onclick="event.stopPropagation(); purgeNode('${esc(c.peer_node_id)}')">删除</button>
       <b>${esc(name)}</b><br>${badge}</div>`;
   }).join("") || '<p class="hint">暂无节点</p>';
 }

@@ -61,7 +61,7 @@ Add to your AI client (e.g. Claude Desktop) `claude_desktop_config.json`:
 {
   "mcpServers": {
     "agent-node": {
-      "command": "python",
+      "command": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/venv/Scripts/python.exe",
       "args": ["-m", "mcp.server"],
       "cwd": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/app",
       "env": {

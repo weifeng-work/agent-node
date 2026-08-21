@@ -198,11 +198,17 @@ class TestSubnetScan(unittest.TestCase):
         # 收敛扫描范围：只扫本机末段（避免整 /24 × 1.5s 超时烧掉预算）
         mesh._scan_node_range = range(int(local_ip.rsplit(".", 1)[1]),
                                       int(local_ip.rsplit(".", 1)[1]) + 1)
+        # 本测试在"本机 IP"上起 server：临时禁用自跳（_local_ip_set），
+        # 并把 announce 快速通道指向无监听端口（port 1），逼出「段扫」路径，专注验证段拨号
+        _old_local = mesh_mod.MeshManager._local_ip_set
+        mesh_mod.MeshManager._local_ip_set = lambda self: set()
+        mesh._announce_ports = lambda: [1]
         try:
             mesh._subnet_scan_once()   # 扫 <本机IP网段>.1..254 × 端口=port
         finally:
             srv.close()
             mesh_mod.MeshManager._scan_subnets = old
+            mesh_mod.MeshManager._local_ip_set = _old_local
         self.assertTrue(accepted.wait(10),
                         "扫描未对段端口发起出站连接")
 

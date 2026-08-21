@@ -81,7 +81,7 @@ class TestMcpServer(unittest.TestCase):
         names = {t["name"] for t in tools}
         # 2.5.9 工具面关键工具齐备
         for expected in ("get_skill", "get_node_info", "list_nodes", "send_text",
-                         "forget_node", "purge_node", "list_dir", "file_push",
+                         "list_dir", "file_push",
                          "file_pull", "list_executors", "submit_task",
                          "get_task_result", "check_inbox", "check_mail",
                          "get_executor_status",

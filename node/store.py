@@ -40,18 +40,6 @@ CREATE TABLE IF NOT EXISTS mailbox (
     consumed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_mailbox_caller ON mailbox(caller_id, consumed);
-CREATE TABLE IF NOT EXISTS known_peers (
-    node_id TEXT PRIMARY KEY,
-    name TEXT,
-    team_id TEXT,
-    capabilities TEXT,
-    switches TEXT,
-    sync_device_id TEXT,
-    host TEXT,
-    peer_tcp_port INTEGER,
-    first_seen TEXT,
-    last_seen TEXT
-);
 CREATE TABLE IF NOT EXISTS chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
@@ -192,73 +180,6 @@ class Store:
         with self._lock, self._db:
             cur = self._db.execute(sql, args)
             return cur.rowcount
-
-    # ---------- known peers（2.1.9） ----------
-    def upsert_peer(self, node_id: str, name: str | None = None, team_id: str | None = None,
-                    capabilities: list | None = None, switches: dict | None = None,
-                    sync_device_id: str | None = None, host: str | None = None,
-                    peer_tcp_port: int | None = None) -> None:
-        now = utcnow()
-        with self._lock, self._db:
-            row = self._db.execute("SELECT first_seen FROM known_peers WHERE node_id=?",
-                                   (node_id,)).fetchone()
-            first = row["first_seen"] if row else now
-            self._db.execute(
-                "INSERT INTO known_peers(node_id, name, team_id, capabilities, switches, "
-                "sync_device_id, host, peer_tcp_port, first_seen, last_seen) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(node_id) DO UPDATE SET "
-                # 空值不覆盖既有值（beacon 与握手两路写入互补）
-                "name=COALESCE(NULLIF(excluded.name,''), known_peers.name), "
-                "team_id=excluded.team_id, "
-                "capabilities=CASE WHEN excluded.capabilities != '[]' "
-                "THEN excluded.capabilities ELSE known_peers.capabilities END, "
-                "switches=CASE WHEN excluded.switches != '{}' "
-                "THEN excluded.switches ELSE known_peers.switches END, "
-                "sync_device_id=COALESCE(NULLIF(excluded.sync_device_id,''), "
-                "known_peers.sync_device_id), "
-                "host=COALESCE(NULLIF(excluded.host,''), known_peers.host), "
-                "peer_tcp_port=COALESCE(NULLIF(excluded.peer_tcp_port,0), known_peers.peer_tcp_port), "
-                "last_seen=excluded.last_seen",
-                (node_id, name or "", team_id or "",
-                 json.dumps(capabilities or [], ensure_ascii=False),
-                 json.dumps(switches or {}, ensure_ascii=False),
-                 sync_device_id or "", host or "", peer_tcp_port, first, now),
-            )
-
-    def peers(self) -> list[dict]:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM known_peers ORDER BY last_seen DESC").fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["capabilities"] = json.loads(d.get("capabilities") or "[]")
-            except Exception:
-                d["capabilities"] = []
-            try:
-                d["switches"] = json.loads(d.get("switches") or "{}")
-            except Exception:
-                d["switches"] = {}
-            out.append(d)
-        return out
-
-    def peer(self, node_id: str) -> dict | None:
-        for p in self.peers():
-            if p["node_id"] == node_id:
-                return p
-        return None
-
-    def delete_peer(self, node_id: str) -> None:
-        with self._lock, self._db:
-            self._db.execute("DELETE FROM known_peers WHERE node_id=?", (node_id,))
-
-    def delete_node_records(self, node_id: str) -> None:
-        """彻底删除死节点：known_peers + chat_messages（comm_log 审计保留，2.3）。"""
-        with self._lock, self._db:
-            self._db.execute("DELETE FROM known_peers WHERE node_id=?", (node_id,))
-            self._db.execute("DELETE FROM chat_messages WHERE peer_node_id=?", (node_id,))
 
     # ---------- 聊天（2.8） ----------
     def add_chat(self, peer_node_id: str, direction: str, text: str,

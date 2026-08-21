@@ -14,6 +14,11 @@ agent-node 是局域网多机智能体协作节点。每台电脑跑一个节点
 2. **跨机文件传输**（推送/拉取/浏览任意目录）
 3. **跨机聊天与远程命令**
 
+> **安装**（无 Node，Windows）：PowerShell 一行 `irm
+> https://raw.githubusercontent.com/weifeng-work/agent-node/main/scripts/install.ps1 | iex`
+> ——自动下源码 + venv 装依赖 + 建桌面快捷方式 + 启动节点。日常控制用
+> `agent-node start|stop|status|restart|update|mcp`。
+
 ## 二、两种接入方式（能力等价）
 
 ### 方式 A: MCP（推荐，支持 MCP 的智能体）
@@ -24,7 +29,7 @@ MCP 客户端 JSON 配置：
 {
   "mcpServers": {
     "agent-node": {
-      "command": "python",
+      "command": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/venv/Scripts/python.exe",
       "args": ["-m", "mcp.server"],
       "cwd": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/app",
       "env": {
@@ -35,10 +40,10 @@ MCP 客户端 JSON 配置：
 }
 ```
 
-> `cwd` 填你机器上节点的 **app 安装目录**（默认 `%LOCALAPPDATA%\agent-node\app`；运行
-> `agent-node` 命令，其 MCP 引导会打印你机器上的真实路径）。`AGENT_NODE_PANEL` 的
-> `5177` 是**默认**面板端口，若被占用节点会自动改用 5178…，实际地址以
-> `agent-node status` 或启动日志显示为准。
+> `command` 一定是 **venv 里的 python**（`%LOCALAPPDATA%\agent-node\venv\Scripts\python.exe`，
+> 依赖装在那里；不要写成系统 `python`）。直接运行 `agent-node mcp` 会打印带本书本机真实路径
+> 的完整 MCP JSON。`AGENT_NODE_PANEL` 的 `5177` 是**默认**面板端口，若被占用节点会自动改用
+> 5178…，实际以 `agent-node status` 显示为准。
 
 **caller_id 是你的身份**（MCP server 进程身份，随每次工具调用自动注入，
 你无需记住它）。**caller_id 对应你的专属收件箱**——异步任务回执只进你的邮箱，
@@ -48,6 +53,10 @@ MCP 客户端 JSON 配置：
 
 ### 方式 B: CLI（不支持 MCP 但有 Bash 能力的智能体）
 
+> 先用「无 Node 一键安装」装好的用户，日常用 `agent-node` 命令：
+> `agent-node start|stop|status|restart|update|mcp`（mcp 会打印真实 MCP 配置）。
+> 下面是**源码/开发形态**的 CLI（`tools/cli.py`，需在仓库目录里跑）：
+
 ```bash
 cd %LOCALAPPDATA%\agent-node\app   # 到节点安装目录（默认；以你机器实际为准）
 python tools/cli.py register          # 首次: 生成 caller_id 身份文件
@@ -55,6 +64,7 @@ python tools/cli.py list              # 在线节点列表（仅显示当前在�
 python tools/cli.py task --target <node_id> --executor <agent_id> \
     --prompt "任务指令" --mode async   # 发任务（--mode sync|async|trigger）
 python tools/cli.py inbox             # 取异步回执（caller_id 自动注入）
+python tools/cli.py anchor add <host> <对方对等TCP端口>   # 入站被隔离时配锚点自愈
 ```
 
 环境变量: `AGENT_NODE_PANEL`（面板地址，默认 http://127.0.0.1:5177）。

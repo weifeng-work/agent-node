@@ -951,22 +951,6 @@ class NodeCore:
             })
         return out
 
-    def forget_node(self, node_id: str) -> bool:
-        self.store.delete_peer(node_id)
-        return True
-
-    def purge_node(self, node_id: str) -> dict:
-        """彻底删除死节点（known_peers + 聊天记录；comm_log 审计保留 2.3）。
-        在线节点拒绝删除——服务端强制校验，防止绕过前端。"""
-        if not node_id:
-            return {"ok": False, "error": "agent_error", "detail": "缺少 node_id"}
-        if self.is_peer_online(node_id):
-            return {"ok": False, "error": "agent_error",
-                    "detail": "节点在线，不可删除（离线后再操作）"}
-        self.store.delete_node_records(node_id)
-        self.log("info", f"彻底删除节点记录: {node_id}")
-        return {"ok": True, "detail": "已删除节点记录与聊天记录（审计日志保留）"}
-
     # ---------- 聊天 ----------
     def send_chat(self, target_node_id: str, text: str,
                   session_id: str | None = None) -> dict:
