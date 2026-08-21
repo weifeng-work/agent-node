@@ -118,6 +118,8 @@ try {
         [Environment]::SetEnvironmentVariable("Path", $new, "User")
         Write-Host ("  已把 " + $ROOT + " 加入用户 PATH（新开终端即可用 agent-node）") -ForegroundColor Green
     } else { Write-Host "  PATH 已包含该目录" }
+    # 尽力放行本地运行（.ps1 默认策略 Restricted 会拦；设 CurrentUser=RemoteSigned 让 agent-node 直接可敲）
+    try { if ((Get-ExecutionPolicy -Scope CurrentUser) -eq "Restricted") { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force } } catch {}
 
     # ---------- 6/8 桌面快捷方式 ----------
     Step 6 "创建桌面快捷方式"
