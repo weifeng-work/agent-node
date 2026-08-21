@@ -13,6 +13,7 @@
     download --from <node_id> --path <远程路径>   （拉到本机收件目录）
     ls --node <node_id> --path <路径> [--recursive]
     shell --to <node_id> --cmd "command"
+    anchor list | add <host> [port] | remove <host>   # 锚点（被隔离节点出站回连）
     sync                         触发同步
     diag                         一键健康自检（2.17.7）
 
@@ -110,6 +111,14 @@ def main() -> int:
     sp = sub.add_parser("node-update", help="远程更新目标节点的代码（发 agent-node update）")
     sp.add_argument("--node", required=True, help="目标节点 node_id")
     sp.add_argument("--timeout", type=float, default=300)
+    sp = sub.add_parser("anchor", help="锚点管理（被 AP 隔离节点主动出站回连）")
+    asp = sp.add_subparsers(dest="action", required=True)
+    asp.add_parser("list", help="查看本机锚点")
+    sp_add = asp.add_parser("add")
+    sp_add.add_argument("host")
+    sp_add.add_argument("port", type=int, default=0, nargs="?")
+    sp_rm = asp.add_parser("remove")
+    sp_rm.add_argument("host")
     sub.add_parser("sync")
     sub.add_parser("diag")
     sp = sub.add_parser("executors", help="执行器列表")
@@ -170,6 +179,14 @@ def main() -> int:
         if r.get("ok") or (r.get("output") or "").strip():
             print("\n更新命令已送达，目标节点将拉取 npm 最新代码并重部署。")
             print("生效需目标节点手动执行: agent-node restart")
+    elif a.cmd == "anchor":
+        if a.action == "list":
+            out(call("GET", "/api/anchors"))
+        elif a.action == "add":
+            out(call("POST", "/api/anchors/add",
+                     {"host": a.host, "peer_tcp_port": a.port}))
+        elif a.action == "remove":
+            out(call("POST", "/api/anchors/remove", {"host": a.host}))
     elif a.cmd == "sync":
         out(call("POST", "/api/sync/now", {}))
     elif a.cmd == "diag":

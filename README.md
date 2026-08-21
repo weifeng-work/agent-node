@@ -18,7 +18,19 @@
 
 ## 快速开始
 
-### 方式一：npm 安装（推荐，Windows）
+### 方式零：一行命令安装（Windows，推荐给不熟 CLI 的用户）
+
+在 PowerShell 里粘贴这一行并回车即可：
+
+```powershell
+irm https://raw.githubusercontent.com/weifeng-work/agent-node/main/scripts/install.ps1 | iex
+```
+
+脚本会自动检测并补装 Node.js / Python（缺失时用 winget）、按 npm 方式部署到
+`%LOCALAPPDATA%\agent-node`、**创建桌面快捷方式**、**自动启动节点并打开面板**。
+无需任何开发工具或排障经验；失败会输出清晰提示。可选开关：`irm ... | iex -Args "-SkipShortcut -SkipStart"`。
+
+### 方式一：npm 安装（手动，Windows）
 
 ```bash
 npm install -g @weifeng-work/agent-node
@@ -51,6 +63,17 @@ python -m node.main --data-dir data
 | `agent-node setup` | 安装或修复 |
 | `agent-node uninstall` | 完整卸载（含数据目录） |
 | `agent-node help` | 帮助 |
+
+> **被 AP 隔离时自动自愈**：默认互不发现的节点，自动做「出站扫描」——凡连上的节点即
+> 自动建立常驻连接（出站流量不被隔离规则拦截）。扫描优先拨**固定通告端口（每 IP 1 端口，
+> 默认 49700）**拿对方真实对等端口再连，免盲扫 20 口对等段；通告不可达才回落段扫
+> （49710–49729）。**无需任何人工配置，启动节点即生效**。也可用
+> `python -m tools.cli anchor add <host> <对方对等TCP端口>`（或面板"锚点"卡）手动指定
+> 锚点作为补充；`anchor list` / `anchor remove <host>` 管理。已有连接时也会**周期轻扫**，
+> 捕捉后加入的孤立节点。
+>
+> > 前提：各节点默认对等端口在约定段（49710–49729）内自动分配，故扫描方能猜中并连上。
+> > 显式配置的 `peer_tcp_port` 仍优先。发现信道为 UDP 广播 + 组播（`239.255.42.47`）四路送达。
 
 ## 让 AI 使用本节点
 

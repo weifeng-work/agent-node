@@ -51,7 +51,7 @@ MCP 客户端 JSON 配置：
 ```bash
 cd %LOCALAPPDATA%\agent-node\app   # 到节点安装目录（默认；以你机器实际为准）
 python tools/cli.py register          # 首次: 生成 caller_id 身份文件
-python tools/cli.py list              # 已知节点列表
+python tools/cli.py list              # 在线节点列表（仅显示当前在线对端）
 python tools/cli.py task --target <node_id> --executor <agent_id> \
     --prompt "任务指令" --mode async   # 发任务（--mode sync|async|trigger）
 python tools/cli.py inbox             # 取异步回执（caller_id 自动注入）
@@ -128,13 +128,13 @@ shell_exec(target_node, command, timeout?)      # 受目标节点 allow_shell �
 - 经标准接口（MCP 工具 / cli.py）操作节点与本网其他节点
 - 读取节点运行状况与日志（get_node_log / get_comm_log）
 - 经 `distribute_plugin` 分发执行器插件、`restart_plugin` 重启插件
+- 经 `restart_node` **重启本机节点进程**（保持驻留，面板短暂中断后自动恢复）
 
 **禁止**：
 - **修改任何节点源码 / 打补丁 / 改配置文件**（擅自改动会让该节点行为与其他
   节点不一致，破坏协同）
-- **擅自启动 / 停止 / 重启节点进程**（节点生命周期由人类掌控；异常时给人类
-  重启指引，报告可用 get_node_log 辅助诊断）
-- 直接构造协议报文绕过语义工具（一切远程操作走 MCP 工具/cli.py）
+- **关闭 / 卸载 / 停止驻留节点进程**（节点需保持驻留；仅允许保持驻留的**重启**，
+  且只经 `restart_node` / cli.py，不得用系统命令强杀）
 
 ## 七、网络故障排查（mihomo/代理）
 
@@ -158,7 +158,12 @@ dns:
 ```
 
 排查顺序：`ipconfig` 看网卡 → ping 对端 IP → 若通但节点发现失败 → 十有八九
-是 TUN 未配直连 → 给出上述配置。
+是 TUN 未配直连 → 给出上述配置。**单向症状**（A 能看见 B，但发往 B 的消息/文件
+offline，且 B 恰好走 Wi-Fi）：多半是路由器「AP 隔离/客户端隔离」挡了入站。此时
+**无需人工配置**——B 会对子网每个 IP 做「出站扫描」：先拨**固定通告端口（每 IP 1 端口，
+默认 49700）**拿到对方真实对等端口再连，通告不可达才扫对等段（49710–49729），凡连上
+即自动建立常驻连接（出站不被隔离拦截），任一可能被隔离的机子重启即可自愈。发现信道为
+UDP 广播 + 组播（`239.255.42.47`）+ 单播四路，互不依赖。
 
 ## 八、更多参考
 

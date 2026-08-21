@@ -150,6 +150,14 @@ async function main() {
         } catch {}
       }
     }
+    // UDP 发现端口入站放行：beacon 用 UDP 在固定端口（默认 41830/41550/60420/31820/26880）
+    // 收广播。程序级 TCP 规则不覆盖 UDP，必须单独放行，否则对端永远"看不见"本机。
+    const discoveryPorts = process.env.AGENT_NODE_DISCOVERY_PORTS ||
+      "41830,41550,60420,31820,26880";
+    try {
+      execSync(`netsh advfirewall firewall add rule name="agent-node discovery UDP" dir=in action=allow protocol=UDP localport=${discoveryPorts} enable=yes`,
+        { stdio: "pipe", windowsHide: true });
+    } catch {}
     log("✓ 防火墙规则已添加（或已存在）", "Firewall rules added (or already exist)");
   } catch {
     log("⚠ 防火墙规则添加需要管理员权限（不影响基础功能）", "Firewall rules need admin (doesn't affect basic features)");

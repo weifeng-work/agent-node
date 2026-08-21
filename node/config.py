@@ -19,10 +19,21 @@ from pathlib import Path
 # 2.1.5: 发现端口集分散不同区间，刻意避开 LocalSend 默认端口 53317
 DEFAULT_DISCOVERY_PORTS = [41830, 41550, 60420, 31820, 26880]
 DEFAULT_PANEL_PORT = 5177
+# 2.18: 约定对等 TCP 端口段。被 AP 隔离的节点靠「出站扫描全子网×段内端口」自动发现
+# 节点：扫描方必须能猜中对方默认监听端口，故默认对等端口从本段分配（冲突顺延，
+# 段满才随机）。避开常见服务端口，降低误连。
+DEFAULT_PEER_PORT_START = 49710
+DEFAULT_PEER_PORT_END = 49729
+# 3.x 发现增强：UDP 组播信道（本地管理范围组；与广播正交，广播被过滤但组播放行时补上）
+DEFAULT_MULTICAST_GROUP = "239.255.42.47"
+# 固定通告 TCP 端口：节点在动态对等端口之外，另监听一个「通告/握手」端，
+# 让子网扫描先以「每 IP 1 端口」命中，免盲扫 20 口对等段。
+DEFAULT_ANNOUNCE_TCP_PORT = 49700
 
 _ENV_CONFIG_DIR = "AGENT_NODE_CONFIG_DIR"
 _ENV_INBOX_DIR = "AGENT_NODE_INBOX_DIR"
 _ENV_DISCOVERY_PORTS = "AGENT_NODE_DISCOVERY_PORTS"
+_ENV_ANCHORS = "AGENT_NODE_ANCHORS"
 
 DEFAULT_CONFIG: dict = {
     "node_id": "",
@@ -32,6 +43,7 @@ DEFAULT_CONFIG: dict = {
     "switches": {"allow_shell": True, "allow_file": True, "allow_ai_task": True},
     "peer_tcp_port": 0,
     "manual_peers": [],
+    "peer_anchors": [],   # 被隔离方向主动出站回连的锚点（host/port），多锚点通用自愈
     "sync_enabled": True,
     "enable_mock": False,  # 内置 mock 测试桩默认关闭（生产不加载；测试/验收显式开启，2.x）
     "discovery_ports": DEFAULT_DISCOVERY_PORTS,
@@ -84,6 +96,8 @@ class NodeConfig:
         cfg["switches"] = {**DEFAULT_CONFIG["switches"], **(cfg.get("switches") or {})}
         if not isinstance(cfg.get("manual_peers"), list):
             cfg["manual_peers"] = []
+        if not isinstance(cfg.get("peer_anchors"), list):
+            cfg["peer_anchors"] = []
         self._cfg = cfg
         if first:
             self.save()
@@ -126,6 +140,43 @@ class NodeConfig:
         return self._cfg["manual_peers"]
 
     @property
+    def peer_anchors(self) -> list:
+        """锚点列表（host/peer_tcp_port）。被隔离方向用它主动出站回连；可经 env 覆盖。"""
+        env = os.environ.get(_ENV_ANCHORS)
+        if env:
+            parsed = []
+            for item in env.replace(";", ",").split(","):
+                item = item.strip()
+                if not item:
+                    continue
+                # 支持 host:port 或 host（端口 0=待协商）
+                try:
+                    host, port = item.rsplit(":", 1)
+                    host, port = host.strip(), int(port)
+                except ValueError:
+                    host, port = item, 0
+                if host:
+                    parsed.append({"host": host, "peer_tcp_port": port})
+            if parsed:
+                return parsed
+        return list(self._cfg["peer_anchors"])
+
+    @peer_anchors.setter
+    def peer_anchors(self, v: list) -> None:
+        self._cfg["peer_anchors"] = [a for a in (v or []) if a.get("host")]
+
+    def peer_port_range(self) -> list[int]:
+        """约定对等端口段（默认分配与子网扫描共用的可预测端口集合）。"""
+        try:
+            lo, hi = int(self._cfg.get("peer_port_range_start") or DEFAULT_PEER_PORT_START), \
+                     int(self._cfg.get("peer_port_range_end") or DEFAULT_PEER_PORT_END)
+        except ValueError:
+            lo, hi = DEFAULT_PEER_PORT_START, DEFAULT_PEER_PORT_END
+        lo = max(1, min(lo, 65535))
+        hi = max(lo, min(hi, 65535))
+        return list(range(lo, hi + 1))
+
+    @property
     def sync_enabled(self) -> bool:
         return bool(self._cfg.get("sync_enabled", True))
 
@@ -166,6 +217,18 @@ class NodeConfig:
                 pass
         cfg_ports = self._cfg.get("discovery_ports")
         return list(cfg_ports) if cfg_ports else list(DEFAULT_DISCOVERY_PORTS)
+
+    # ---- 发现增强（3.x）：组播组 + 固定通告端口 ----
+    @property
+    def multicast_group(self) -> str:
+        return str(self._cfg.get("multicast_group") or DEFAULT_MULTICAST_GROUP).strip()
+
+    @property
+    def announce_tcp_port(self) -> int:
+        try:
+            return int(self._cfg.get("announce_tcp_port") or DEFAULT_ANNOUNCE_TCP_PORT)
+        except (TypeError, ValueError):
+            return DEFAULT_ANNOUNCE_TCP_PORT
 
     def inbox_dir(self) -> Path:
         env = os.environ.get(_ENV_INBOX_DIR)

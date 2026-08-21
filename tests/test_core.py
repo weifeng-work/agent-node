@@ -1,7 +1,8 @@
-"""单元测试: 整目录推送 push_dir（目录遍历/排除 + 本机整树落盘重建）。"""
+"""单元测试: 整目录推送 push_dir（目录遍历/排除 + 本机整树落盘重建）+ 节点重启。"""
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from node.core import NodeCore, _iter_dir_proj_files
 
@@ -48,6 +49,27 @@ class TestPushDir(unittest.TestCase):
             finally:
                 core.stop()
             self.assertFalse(r["ok"])
+
+
+class TestRestartSelf(unittest.TestCase):
+    def test_restart_self_spawns_detached_relaunch(self):
+        """restart_self 应返回 ok 并发起脱离的重新拉起命令（不真正杀本进程）。"""
+        import subprocess
+        with tempfile.TemporaryDirectory() as t:
+            core = NodeCore(Path(t) / "data")
+            try:
+                with mock.patch.object(subprocess, "Popen") as m:
+                    r = core.restart_self()
+                self.assertTrue(r["ok"], r)
+                args = m.call_args[0][0]  # 命令 argv
+                joined = " ".join(args)
+                self.assertIn("-Command", args)
+                self.assertIn("Stop-Process", joined)
+                # 重启命令嵌入在 PowerShell -Command 字符串内
+                self.assertIn("-m", joined)
+                self.assertIn("node.main", joined)
+            finally:
+                core.stop()
 
 
 if __name__ == "__main__":

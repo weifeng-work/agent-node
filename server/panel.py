@@ -59,6 +59,20 @@ def create_app(core) -> FastAPI:
     async def remove_manual(body: dict):
         return core.remove_manual_peer(body.get("host") or "")
 
+    # ---------- 锚点（2.18: 被隔离方向主动出站回连） ----------
+    @app.get("/api/anchors")
+    def anchors():
+        return {"ok": True, "anchors": core.config.peer_anchors}
+
+    @app.post("/api/anchors/add")
+    async def anchor_add(body: dict):
+        return core.add_anchor(body.get("host") or "",
+                               int(body.get("peer_tcp_port") or 0))
+
+    @app.post("/api/anchors/remove")
+    async def anchor_remove(body: dict):
+        return core.remove_anchor(body.get("host") or "")
+
     # ---------- 聊天（2.8） ----------
     @app.get("/api/chat/conversations")
     def conversations():
@@ -253,6 +267,11 @@ def create_app(core) -> FastAPI:
         core.config.sync_enabled = bool(body.get("enabled"))
         core.config.save()
         return {"ok": True, "detail": "需重启节点生效"}
+
+    # ---------- 节点生命周期：重启本机（面板/AI，2.11.3 已放宽；仅本机，保持驻留） ----------
+    @app.post("/api/node/restart")
+    async def node_restart():
+        return core.restart_self()
 
     # ---------- shell（2.5.9 ⑧） ----------
     @app.post("/api/shell")

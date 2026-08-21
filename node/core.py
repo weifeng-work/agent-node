@@ -40,7 +40,8 @@ SHELL_DEFAULT_TIMEOUT = 60
 # 整目录推送默认排除项（避免把 venv/data/依赖/构建产物推给对端）
 _EXCLUDE_DIRS = {"venv", "data", ".git", "__pycache__", "node_modules",
                  "dist", "build", ".idea", ".vscode", "node.lock"}
-STALE_PURGE_SEC = 7 * 86400   # 长期离线节点自动清理窗口（7 天 > 该时长则移除，comm_log 保留）
+# 仅在线模式：长期无信标且未连接的节点元数据/状态清理窗口（秒）。离线节点在面板即时消失。
+STALE_META_SEC = 300
 ASYNC_RETRY_TTL = 600   # 2.6 异步回执重试窗口（秒）
 REMOTE_CACHE_TTL = 3600  # 远端结果/任务/异步挂起缓存回收窗口（对齐 registry 1h）
 
@@ -99,7 +100,8 @@ class NodeCore:
             self.config.discovery_ports(), self.node_id,
             payload_provider=lambda: build_beacon_payload(self),
             on_beacon=self._on_beacon,
-            known_hosts_provider=self._known_peer_hosts)
+            known_hosts_provider=self._known_peer_hosts,
+            multicast_group=self.config.multicast_group)
         self.registry = ExecutorRegistry(self)
         self.sync = None  # 可选（sync/syncthing.py，延后初始化）
         self.panel_port = panel_port
@@ -107,6 +109,7 @@ class NodeCore:
         self._pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="handler")
         self._lock = threading.RLock()
         self._last_beacon: dict[str, float] = {}
+        self._peer_meta: dict[str, dict] = {}   # 在线节点元数据（beacon/连接更新，离线即清理，2.1.9）
         self._probe_fails: dict[str, int] = {}
         self._online: dict[str, bool] = {}
         self._notifications: list[dict] = []
@@ -143,6 +146,8 @@ class NodeCore:
     def start(self) -> None:
         self._acquire_single_instance()
         self.mesh.start()
+        self.mesh.start_anchor_polling(self.config.peer_anchors)
+        self.mesh.start_subnet_scan()  # 2.18: 被隔离节点全自动「出站扫描」自愈
         self.registry.load_plugins()
         self.registry.start_poller()
         self.beacon.start()
@@ -180,14 +185,14 @@ class NodeCore:
         回应用户「应有心跳记录」的观察——ping/pong 本身不落日志以免刷屏）。"""
         while not self._stopping:
             self._prune_remote_caches()
-            self._auto_purge_stale_peers()
             try:
                 with self.mesh._conn_lock:
                     conns = [pid for pid, c in self.mesh.connections.items()
                              if c.alive and c.handshake_done]
                 names = []
                 for pid in conns:
-                    peer = self.store.peer(pid)
+                    with self._lock:
+                        peer = self._peer_meta.get(pid)
                     names.append((peer or {}).get("name") or pid[-6:])
                 self.log("info", f"心跳: mesh 连接 {len(conns)} 个"
                                  f"（{', '.join(names) if names else '无'}）; "
@@ -231,6 +236,45 @@ class NodeCore:
         except Exception:
             pass
         self._release_single_instance(clean=True)
+
+    def restart_self(self) -> dict:
+        """重启本机节点进程（面板/AI 触发，2.11.3 已放宽：允许控制保持驻留的重启）。
+
+        进程保持驻留：后台脚本先杀本进程、等端口释放，再按原启动方式（pythonw -m
+        node.main --data-dir <data>）拉起新进程，面板短暂中断后自动恢复。
+        """
+        try:
+            exe = sys.executable
+            root = Path(__file__).resolve().parents[1]
+            data = str(self.data_dir)
+            boot = (
+                "Start-Sleep -Seconds 2; "
+                f"Stop-Process -Id {os.getpid()} -Force -ErrorAction SilentlyContinue; "
+                "Start-Sleep -Milliseconds 500; "
+                f"Start-Process -FilePath '{exe}' "
+                f"-ArgumentList '-m','node.main','--data-dir','{data}' "
+                f"-WorkingDirectory '{root}' -WindowStyle Hidden"
+            )
+            flags = 0
+            if sys.platform == "win32":
+                # 注意：不要用 DETACHED_PROCESS（与 CREATE_NO_WINDOW 冲突会使子进程
+                # 启动失败）；用 CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW 即可隐藏窗口并无控制台。
+                flags = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                         | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden",
+                 "-Command", boot],
+                cwd=str(root),
+                creationflags=flags,
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
+            self.log("info", f"面板/AI 触发本机节点重启（pid={os.getpid()}，data={data}）")
+            return {"ok": True, "detail": "正在重启本机节点，面板将短暂中断后自动恢复"}
+        except Exception as e:
+            self.log("error", f"重启命令发起失败: {e}")
+            return {"ok": False, "error": "agent_error", "detail": f"重启失败: {e}"}
 
     # ---------- 单实例 + 异常退出检测（2.11.3 / 2.12.2） ----------
     def _acquire_single_instance(self) -> None:
@@ -292,18 +336,16 @@ class NodeCore:
 
     # ================= beacon / 在线检测 =================
     def _known_peer_hosts(self) -> set[str]:
-        """已知对端 host IP 集合（beacon 定向单播目标）。"""
+        """已知对端 host IP 集合（beacon 定向单播目标）——仅在线连接 + 锚点。"""
         hosts: set[str] = set()
         for addr in self.mesh._known_addrs.values():
             if addr and addr[0]:
                 hosts.add(addr[0])
-        try:
-            for p in self.store.peers():
-                h = p.get("host")
-                if h:
-                    hosts.add(h)
-        except Exception:
-            pass
+        # 锚点 host 也是 beacon 定向单播目标（被隔离方即使收不到广播也能收到锚点单播）
+        for a in self.config.peer_anchors:
+            h = a.get("host")
+            if h:
+                hosts.add(h)
         hosts.discard("")
         return hosts
 
@@ -315,12 +357,13 @@ class NodeCore:
         peer_tcp = int(ports.get("peer_tcp") or 0)
         caps = payload.get("capabilities") or []
         switches = payload.get("switches") or {}
-        self.store.upsert_peer(
-            node_id, name=payload.get("name"), team_id=payload.get("team_id"),
-            capabilities=caps, switches=switches,
-            sync_device_id=payload.get("sync_device_id"),
-            host=addr[0], peer_tcp_port=peer_tcp)
         with self._lock:
+            self._peer_meta[node_id] = {
+                "name": payload.get("name"), "team_id": payload.get("team_id"),
+                "capabilities": caps, "switches": switches,
+                "sync_device_id": payload.get("sync_device_id"),
+                "host": addr[0], "peer_tcp_port": peer_tcp,
+                "last_seen": utcnow()}
             self._last_beacon[node_id] = time.time()
             self._probe_fails[node_id] = 0
         # 同步引擎自动互配（2.4.7）
@@ -337,10 +380,11 @@ class NodeCore:
     def on_peer_connected(self, node_id: str, conn) -> None:
         with self._lock:
             self._online[node_id] = True
-        self.store.upsert_peer(node_id, name=conn.peer_name,
-                               team_id=conn.peer_team,
-                               host=conn.addr[0] if conn.addr else None,
-                               peer_tcp_port=conn.peer_peer_tcp)
+            m = self._peer_meta.setdefault(node_id, {})
+            m.update({"name": conn.peer_name, "team_id": conn.peer_team,
+                      "host": conn.addr[0] if conn.addr else None,
+                      "peer_tcp_port": conn.peer_peer_tcp,
+                      "last_seen": utcnow()})
         self.log("info", f"对端已连接: {node_id} ({conn.addr})")
         self._notify("info", f"节点已连接: {self._peer_display_name(node_id)}")
 
@@ -350,8 +394,9 @@ class NodeCore:
             self._notify("warning", f"节点连接断开: {self._peer_display_name(node_id)}")
 
     def _peer_display_name(self, node_id: str) -> str:
-        p = self.store.peer(node_id)
-        return f"{p.get('name') or node_id}" if p else node_id
+        with self._lock:
+            m = self._peer_meta.get(node_id)
+        return f"{m.get('name') or node_id}" if m else node_id
 
     def is_peer_online(self, node_id: str) -> bool:
         if self.mesh.is_online(node_id):
@@ -360,12 +405,40 @@ class NodeCore:
             ts = self._last_beacon.get(node_id, 0)
         return (time.time() - ts) < BEACON_ONLINE_SEC
 
+    def _online_candidates(self) -> list[dict]:
+        """在线/近期活跃对端集合（仅在线模式：离线节点即消失，不落库恢复）。"""
+        live = {pid for pid, c in self.mesh.connections.items()
+                if c.alive and c.handshake_done}
+        with self._lock:
+            cand = set(live) | set(self._last_beacon.keys())
+            host_by_id = {}
+            for nid in cand:
+                m = self._peer_meta.get(nid) or {}
+                host_by_id[nid] = (m.get("host"), m.get("peer_tcp_port"))
+        return [{"node_id": nid,
+                 "host": (host_by_id[nid][0] or ""),
+                 "peer_tcp_port": int(host_by_id[nid][1] or 0)}
+                for nid in sorted(cand)]
+
+    def _prune_stale_meta(self) -> None:
+        """清理长期无信标且未连接的离线节点元数据/状态（防无界堆积）。"""
+        live = {pid for pid, c in self.mesh.connections.items()
+                if c.alive and c.handshake_done}
+        cutoff = time.time() - STALE_META_SEC
+        with self._lock:
+            stale = [nid for nid, ts in list(self._last_beacon.items())
+                     if nid not in live and ts < cutoff]
+            for nid in stale:
+                self._last_beacon.pop(nid, None)
+                self._peer_meta.pop(nid, None)
+                self._online.pop(nid, None)
+                self._probe_fails.pop(nid, None)
+
     def _online_monitor(self) -> None:
         """2.1.6: beacon 超时 → TCP 探测；3 次失败 → 离线。"""
         while not self._stopping:
             try:
-                peers = self.store.peers()
-                for p in peers:
+                for p in self._online_candidates():
                     node_id = p["node_id"]
                     if node_id == self.node_id:
                         continue
@@ -380,8 +453,8 @@ class NodeCore:
                         continue  # beacon 仍在到达
                     # 超时 → TCP 探测
                     addr = self.mesh.peer_addr(node_id) or (
-                        (p.get("host"), p.get("peer_tcp_port"))
-                        if p.get("host") and p.get("peer_tcp_port") else None)
+                        (p["host"], p["peer_tcp_port"])
+                        if p["host"] and p["peer_tcp_port"] else None)
                     if not addr:
                         continue
                     ok = False
@@ -399,6 +472,7 @@ class NodeCore:
                             self.log("info", f"节点判定离线: {node_id}（连续 {PROBE_FAILS} 次探测失败）")
             except Exception:
                 traceback.print_exc()
+            self._prune_stale_meta()
             time.sleep(2)
 
     def _manual_peer_loop(self) -> None:
@@ -825,6 +899,7 @@ class NodeCore:
             "uptimeSec": int(time.time() - self.started_at),
             "discoveryPorts": self.config.discovery_ports(),
             "peerTcpPort": self.mesh.my_listen_port,
+            "peerAnchors": self.config.peer_anchors,
             "panelPort": self.panel_port,
             "panelUrl": self.panel_url(),
             "switches": dict(self.config.switches),
@@ -851,23 +926,28 @@ class NodeCore:
     def panel_url(self) -> str:
         return f"http://127.0.0.1:{self.panel_port}/" if self.panel_port else ""
 
-    # ---------- 节点列表（2.1.9 离线不消失） ----------
+    # ---------- 节点列表（2.1.9 仅在线显示：离线节点即时消失） ----------
     def list_nodes(self) -> list[dict]:
         out = []
-        for p in self.store.peers():
-            node_id = p["node_id"]
+        with self._lock:
+            meta = dict(self._peer_meta)
+        with self.mesh._conn_lock:
+            conns = {pid: c for pid, c in self.mesh.connections.items()
+                     if c.alive and c.handshake_done}
+        for node_id, c in sorted(conns.items()):
+            m = meta.get(node_id, {})
             out.append({
                 "nodeId": node_id,
-                "name": p.get("name"),
-                "teamId": p.get("team_id"),
-                "capabilities": p.get("capabilities") or [],
-                "switches": p.get("switches") or {},
-                "host": p.get("host"),
-                "peerTcpPort": p.get("peer_tcp_port"),
-                "online": self.is_peer_online(node_id),
-                "connected": self.mesh.is_online(node_id),
-                "lastSeen": p.get("last_seen"),
-                "firstSeen": p.get("first_seen"),
+                "name": m.get("name") or c.peer_name,
+                "teamId": m.get("team_id") or c.peer_team,
+                "capabilities": m.get("capabilities") or [],
+                "switches": m.get("switches") or {},
+                "host": m.get("host") or (c.addr[0] if c.addr else ""),
+                "peerTcpPort": m.get("peer_tcp_port") or c.peer_peer_tcp or 0,
+                "online": True,
+                "connected": True,
+                "lastSeen": m.get("last_seen"),
+                "firstSeen": None,
             })
         return out
 
@@ -893,7 +973,8 @@ class NodeCore:
         if not self.mesh.is_online(target_node_id):
             # 已知地址则尝试即时建连后发送
             addr = self.mesh.peer_addr(target_node_id)
-            peer = self.store.peer(target_node_id)
+            with self._lock:
+                peer = self._peer_meta.get(target_node_id)
             if not addr and peer and peer.get("host") and peer.get("peer_tcp_port"):
                 addr = (peer["host"], int(peer["peer_tcp_port"]))
             if addr:
@@ -1063,10 +1144,14 @@ class NodeCore:
                 "premises": entry.get("premises") or [],
                 "sessionPolicy": "fresh" if e.get("executorType") == "non_interactive_cli" else "session",
             })
-        for p in self.store.peers():
-            node_id = p["node_id"]
-            online = self.is_peer_online(node_id)
-            for cap in p.get("capabilities") or []:
+        # 远程执行器仅来自在线节点（仅在线模式：离线节点执行器不显示）
+        with self._lock:
+            meta = dict(self._peer_meta)
+        with self.mesh._conn_lock:
+            live = {pid for pid, c in self.mesh.connections.items()
+                    if c.alive and c.handshake_done}
+        for node_id in sorted(live):
+            for cap in (meta.get(node_id) or {}).get("capabilities") or []:
                 out.append({
                     "executorId": f"{node_id}/{cap.get('agentId')}",
                     "nodeId": node_id,
@@ -1074,7 +1159,7 @@ class NodeCore:
                     "name": cap.get("name"),
                     "executorType": cap.get("executorType"),
                     "concurrency": cap.get("concurrency"),
-                    "online": online, "local": False,
+                    "online": True, "local": False,
                     "premises": [],
                     "sessionPolicy": "fresh" if cap.get("executorType") == "non_interactive_cli" else "session",
                 })
@@ -1302,34 +1387,6 @@ class NodeCore:
                 self._async_pending_ts.pop(tid, None)
                 self._async_pending.pop(tid, None)
 
-    def _auto_purge_stale_peers(self) -> None:
-        """自动清理长期离线测试节点：离线超 STALE_PURGE_SEC 且当前不在线→移除
-        节点记录与聊天记录（comm_log 审计保留，防污染面板；重新上线经 beacon 自动恢复）。"""
-        import datetime as _dt
-        try:
-            cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=STALE_PURGE_SEC)
-            for p in self.store.peers():
-                node_id = p.get("node_id")
-                if not node_id or node_id == self.node_id:
-                    continue
-                if self.is_peer_online(node_id):
-                    continue
-                last = p.get("last_seen") or ""
-                if not last:
-                    continue
-                try:
-                    ts = _dt.datetime.fromisoformat(last)
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=_dt.timezone.utc)
-                except ValueError:
-                    continue
-                if ts < cutoff:
-                    self.store.delete_node_records(node_id)
-                    self.log("info", f"自动清理长期离线节点记录: {node_id} "
-                                     f"（last_seen={last}，comm_log 保留）")
-        except Exception:
-            pass
-
     # ---------- mailbox ----------
     def check_mail(self, caller_id: str) -> list[dict]:
         return self.store.fetch_mail(caller_id)
@@ -1385,6 +1442,28 @@ class NodeCore:
     def remove_manual_peer(self, host: str) -> dict:
         self.config.manual_peers = [m for m in self.config.manual_peers
                                     if m.get("host") != host]
+        self.config.save()
+        return {"ok": True}
+
+    # ---------- 锚点（被隔离方向主动出站回连） ----------
+    def add_anchor(self, host: str, peer_tcp_port: int = 0) -> dict:
+        """添加锚点并立即触发一次出站拨号。供被 AP 隔离的节点自愈。"""
+        a = {"host": str(host).strip(), "peer_tcp_port": int(peer_tcp_port)}
+        if not a["host"]:
+            return {"ok": False, "detail": "host 不能为空"}
+        anchors = list(self.config.peer_anchors)
+        if a not in anchors:
+            anchors.append(a)
+            self.config.peer_anchors = anchors
+            self.config.save()
+        conn = self.mesh.connect(host, int(peer_tcp_port)) if peer_tcp_port else None
+        return {"ok": True,
+                "detail": "已记录锚点（连接结果见节点列表）" if conn is None
+                          else "已记录锚点并触发连接"}
+
+    def remove_anchor(self, host: str) -> dict:
+        self.config.peer_anchors = [a for a in self.config.peer_anchors
+                                    if a.get("host") != host]
         self.config.save()
         return {"ok": True}
 

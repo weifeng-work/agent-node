@@ -150,8 +150,10 @@ TOOLS = [
     # ① 本机状态
     {"name": "get_node_info", "description": "本机节点概览: node_id/名称/team/IP/端口/面板/三开关/在线状态",
      "inputSchema": _s({})},
+    {"name": "restart_node", "description": "重启本机节点进程（保持驻留，面板短暂中断后自动恢复）。仅本机，无需参数。",
+     "inputSchema": _s({})},
     # ② 节点
-    {"name": "list_nodes", "description": "已知节点列表（含离线不消失: node_id+名称+team+能力+在线状态+last_seen）",
+    {"name": "list_nodes", "description": "在线节点列表（node_id+名称+team+能力+开关+地址，仅显示当前在线对端）",
      "inputSchema": _s({})},
     {"name": "forget_node", "description": "忘记节点（从已知列表移除，保留聊天记录）",
      "inputSchema": _s({"node_id": {"type": "string"}}, ["node_id"])},
@@ -162,6 +164,13 @@ TOOLS = [
                        ["host", "peer_tcp_port"])},
     {"name": "remove_manual_peer", "description": "移除手动加入的对端地址",
      "inputSchema": _s({"host": {"type": "string"}}, ["host"])},
+    {"name": "add_anchor", "description": "添加锚点：被 AP 隔离的节点（入站被隔离只能出站）主动出站回连目标，实现通用自愈。peer_tcp_port=目标节点 TCP 端口。",
+     "inputSchema": _s({"host": {"type": "string"}, "peer_tcp_port": {"type": "integer"}},
+                       ["host", "peer_tcp_port"])},
+    {"name": "remove_anchor", "description": "移除锚点",
+     "inputSchema": _s({"host": {"type": "string"}}, ["host"])},
+    {"name": "list_anchors", "description": "查看本机锚点列表",
+     "inputSchema": _s({})},
     # ③ 聊天
     {"name": "send_text", "description": "向目标节点发文本消息（仅在线可发；不受开关管辖）",
      "inputSchema": _s({"target_node": {"type": "string", "description": "目标 node_id"},
@@ -267,6 +276,8 @@ def dispatch_tool(name: str, args: dict) -> str:
         r = _get_skill(a.get("doc"))
     elif name == "get_node_info":
         r = panel_call("GET", "/api/overview")
+    elif name == "restart_node":
+        r = panel_call("POST", "/api/node/restart", {})
     elif name == "list_nodes":
         r = panel_call("GET", "/api/nodes")
     elif name == "forget_node":
@@ -278,6 +289,13 @@ def dispatch_tool(name: str, args: dict) -> str:
                        {"host": a["host"], "peer_tcp_port": a["peer_tcp_port"]})
     elif name == "remove_manual_peer":
         r = panel_call("POST", "/api/peers/remove_manual", {"host": a["host"]})
+    elif name == "add_anchor":
+        r = panel_call("POST", "/api/anchors/add",
+                       {"host": a["host"], "peer_tcp_port": a.get("peer_tcp_port") or 0})
+    elif name == "remove_anchor":
+        r = panel_call("POST", "/api/anchors/remove", {"host": a["host"]})
+    elif name == "list_anchors":
+        r = panel_call("GET", "/api/anchors")
     elif name == "send_text":
         r = panel_call("POST", "/api/chat/send",
                        {"target_node_id": a["target_node"], "text": a["text"],

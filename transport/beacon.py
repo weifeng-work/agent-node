@@ -8,12 +8,25 @@ from __future__ import annotations
 
 import json
 import socket
+import struct
 import threading
 import time
 from collections import deque
 
 BEACON_INTERVAL = 2.0  # 2.1.6 默认时序参数
 _BROADCAST_HOST = "255.255.255.255"
+
+
+def _join_multicast(sock: socket.socket, group: str, ttl: int = 8) -> None:
+    """加入组播组（接收）并设置 TTL/回环用于发送。组播与广播正交，互为兜底。"""
+    try:
+        mreq = struct.pack("4s4s", socket.inet_aton(group), socket.inet_aton("0.0.0.0"))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        # 允许组播回环（本机多实例），并跳数克制避免泄漏出网段
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+    except OSError:
+        pass
 
 
 def _local_ips() -> list[str]:
@@ -72,15 +85,17 @@ def _subnet_broadcasts() -> list[str]:
 class BeaconService:
     def __init__(self, ports: list[int], my_node_id: str, payload_provider,
                  on_beacon, interval: float = BEACON_INTERVAL,
-                 known_hosts_provider=None):
+                 known_hosts_provider=None, multicast_group: str = ""):
         """payload_provider() -> dict（不含 seq）；on_beacon(payload_dict, addr) 在监听线程调用。
-        known_hosts_provider() -> set[str]: 已知对端 host IP（beacon 定向单播兜底）。"""
+        known_hosts_provider() -> set[str]: 已知对端 host IP（beacon 定向单播兜底）。
+        multicast_group: 非空则加入该组播组并同时向组播地址收发（与广播正交，3.x）。"""
         self.ports = list(ports)
         self.my_node_id = my_node_id
         self.payload_provider = payload_provider
         self.on_beacon = on_beacon
         self.interval = interval
         self.known_hosts_provider = known_hosts_provider or (lambda: set())
+        self.multicast_group = (multicast_group or "").strip()
         self._seq = 0
         self._recent: dict[str, deque] = {}
         self._recent_lock = threading.Lock()
@@ -103,6 +118,8 @@ class BeaconService:
     def start(self) -> None:
         self._send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        if self.multicast_group:
+            _join_multicast(self._send_sock, self.multicast_group)
         for p in self.ports:
             t = threading.Thread(target=self._listen_loop, args=(p,), daemon=True,
                                  name=f"beacon-listen-{p}")
@@ -127,6 +144,8 @@ class BeaconService:
             # Windows 下 SO_REUSEADDR 允许多实例/多进程同端口监听（本地集成测试需要）
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("0.0.0.0", port))
+            if self.multicast_group:
+                _join_multicast(sock, self.multicast_group)
             sock.settimeout(1.0)
         except OSError:
             return  # 该端口被占 → 跳过该端口（2.1.5 端口容错）
@@ -165,10 +184,12 @@ class BeaconService:
                 base["v"] = 1
                 base["seq"] = self._seq
                 data = json.dumps(base, ensure_ascii=False).encode("utf-8")
-                # 三路并发送达: 全网广播 + 子网定向广播（部分环境不收全网广播）+
-                # 已知对端单播（最可靠，已知节点状态更新不受广播环境影响）
+                # 多路并发送达: 全网广播 + 子网定向广播（部分环境不收全网广播）+
+                # 已知对端单播（最可靠，已知节点状态更新不受广播环境影响）+ 组播（3.x 正交信道）
                 targets = {_BROADCAST_HOST}
                 targets.update(_subnet_broadcasts())
+                if self.multicast_group:
+                    targets.add(self.multicast_group)
                 try:
                     targets.update(self.known_hosts_provider())
                 except Exception:

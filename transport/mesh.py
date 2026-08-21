@@ -308,8 +308,16 @@ class MeshManager:
         self._known_addrs: dict[str, tuple[str, int]] = {}   # node_id -> (host, port)
         self._connecting: set[str] = set()                   # 并发建连去重
         self._server: socket.socket | None = None
+        self._announce_sock: socket.socket | None = None
+        self._announce_port: int | None = None
         self.my_listen_port: int | None = None
         self._stopping = False
+        self._anchors_provider = None              # () -> list[{host, peer_tcp_port}]
+        self._scan_cool: dict[str, float] = {}      # 扫描: ip -> 下次可探测时间
+        self._scan_lasts: dict[str, float] = {}     # 扫描: ip -> 探测节流时间戳
+        self._scan_interval = 12.0
+        self._scan_timeout = 1.5
+        self._scan_node_range = range(1, 255)   # 测试可注入收敛范围
 
     # ---- 基本属性（team/name 可变，经回调取当前值） ----
     @property
@@ -326,25 +334,110 @@ class MeshManager:
     # ---------- 启动 ----------
     def start(self, host: str = "0.0.0.0") -> None:
         # 端口在 start 时读配置（构造后仍可改 peer_tcp_port）
+        # 2.18: 可预测对等端口 —— 显式端口优先；默认(0)从约定段内顺延分配，
+        # 段满才随机。保证被隔离节点能靠「出站扫描全子网×段」猜中并连上本机。
         port = self._listen_port_req
+        default_range = []
         try:
             cfg_port = int(self.node_core.config.peer_tcp_port or 0)
-            if cfg_port:
-                port = cfg_port
         except Exception:
-            pass
+            cfg_port = 0
+        try:
+            default_range = self.node_core.config.peer_port_range()
+        except Exception:
+            default_range = []
+        # 候选顺序：显式端口 → 约定段 → 0(随机)
+        candidates = []
+        if cfg_port:
+            candidates.append(cfg_port)
+        candidates += [p for p in default_range if p not in candidates]
+        candidates.append(0)
+
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server.bind((host, port))
+        bound = None
+        for cport in candidates:
+            try:
+                self._server.bind((host, cport))
+                bound = cport
+                break
+            except OSError:
+                continue
+        if bound is None:  # 理论上不会（含 0）
+            self._server.bind((host, 0))
         self._server.listen(16)
         self.my_listen_port = self._server.getsockname()[1]
+        self.node_core.log("info", f"mesh 监听端口: {self.my_listen_port} (候选 {candidates})")
         threading.Thread(target=self._accept_loop, daemon=True, name="mesh-accept").start()
+        self._start_announce_listener(host)
+
+    def _start_announce_listener(self, host: str) -> None:
+        """固定「通告」TCP 端（3.x）：只管应答 whoami，让子网扫描先以每 IP 1 端口命中。
+
+        非 mesh 连接：收到连接即回一行 JSON（含真实对等端口），随即关闭；不做全握手，
+        因此不参与 mesh 去双连接，扫描方据此拿到真实端口后再拨 mesh。
+        """
+        try:
+            base = self.node_core.config.announce_tcp_port
+        except Exception:
+            base = 49700
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # 不用 SO_REUSEADDR：Windows 下它会允许同端口双 LISTEN，破坏「被占则顺延」；
+        # 通告监听器短生命周期，正常关闭即可。
+        bound = None
+        for p in range(base, base + 5):  # 端口被占则顺延，避免与蜂窝冲突
+            try:
+                sock.bind((host, p))
+                bound = p
+                break
+            except OSError:
+                continue
+        if bound is None:
+            sock.close()
+            return
+        sock.listen(16)
+        self._announce_sock = sock
+        self._announce_port = bound
+        self.node_core.log("info", f"通告 TCP 端口: {bound}")
+
+        def _loop():
+            while not self._stopping:
+                try:
+                    conn, _addr = sock.accept()
+                except OSError:
+                    break
+                try:
+                    conn.settimeout(2.0)
+                    cfg = getattr(self.node_core, "config", None) or {}
+                    name = getattr(cfg, "name", "") or ""
+                    team = getattr(cfg, "team_id", "") or ""
+                    hello = {
+                        "v": 1, "kind": "agent-node-announce",
+                        "node_id": self.my_node_id,
+                        "name": name,
+                        "peer_tcp_port": self.my_listen_port or 0,
+                        "team_id": team,
+                    }
+                    conn.sendall((json.dumps(hello) + "\n").encode("utf-8"))
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        threading.Thread(target=_loop, daemon=True, name="mesh-announce").start()
 
     def stop(self) -> None:
         self._stopping = True
         try:
             if self._server:
                 self._server.close()
+        except Exception:
+            pass
+        try:
+            if self._announce_sock:
+                self._announce_sock.close()
         except Exception:
             pass
         with self._conn_lock:
@@ -366,10 +459,10 @@ class MeshManager:
             conn.start()
 
     # ---------- 连接管理 ----------
-    def connect(self, host: str, port: int) -> Connection | None:
+    def connect(self, host: str, port: int, timeout: float = 5.0) -> Connection | None:
         """主动连接对端（异步握手；握手成功经 _register 回调）。"""
         try:
-            sock = socket.create_connection((host, int(port)), timeout=5)
+            sock = socket.create_connection((host, int(port)), timeout=timeout)
         except OSError:
             return None
         try:
@@ -395,6 +488,209 @@ class MeshManager:
         finally:
             with self._conn_lock:
                 self._connecting.discard(node_id)
+
+    # ---------- 锚点出站拨号（被隔离方向通用自愈） ----------
+    def start_anchor_polling(self, anchors_provider, interval: float = 30.0) -> None:
+        """启动锚点主动出站回连循环。anchors_provider() -> list[{host, peer_tcp_port}]。
+
+        用于「目的节点入站被 AP 隔离」的通用自愈：本机作为被隔离方，主动出站连接
+        锚点。出站链路通常不被隔离规则丢弃，连上后照常握手/注册，双向消息可达。
+        每次遍历总是尝试补齐对每个锚点的连接；既不依赖广播也无需判断对端可达性。
+        """
+        self._anchors_provider = anchors_provider
+        self._anchor_interval = float(interval)
+
+        def _loop():
+            while not self._stopping:
+                try:
+                    anchors = self._anchors_provider() or []
+                except Exception:
+                    anchors = []
+                for a in anchors:
+                    if self._stopping:
+                        return
+                    try:
+                        host, port = a.get("host"), int(a.get("peer_tcp_port") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if not host or not port:
+                        continue
+                    # 已有一致 host 的存活连接则不重复拨号
+                    if self._has_live_conn_to(host):
+                        continue
+                    self.node_core.log("info", f"锚点出站拨号: {host}:{port}")
+                    self.connect(host, port)
+                for _ in range(max(1, int(self._anchor_interval))):
+                    if self._stopping:
+                        return
+                    time.sleep(1)
+
+        threading.Thread(target=_loop, daemon=True, name="mesh-anchor-dial").start()
+
+    # ---------- 自动子网扫描（2.18 / 3.x: 被 AP 隔离 + 通告端口快速通道） ----------
+    def start_subnet_scan(self, interval: float = 12.0, connect_timeout: float = 1.5) -> None:
+        """对被隔离节点做「出站扫描」的自动发现。
+
+        原理：AP 隔离挡的是入站，出站单播放行。本机主动对子网内每个 IP 发起短超时
+        连接，凡握手成功即注册为常驻双向连接。3.x 增强：
+        - **快速通道**：先拨固定「通告」TCP 端口（每 IP 1 端口，读 whoami 拿真实对等
+          端口再拨 mesh），免盲扫 20 口对等段；通告不可达才回落到段扫。
+        - **不断连也轻量补扫**：即使已有存活连接，也周期性（每 3 轮）作一次仅通告端口
+          的轻扫，捕捉后加入的孤立节点；全段扫仅在「零存活连接」时进行。
+        带冷却与节流，避免风暴。
+        """
+        self._scan_interval = float(interval)
+        self._scan_timeout = float(connect_timeout)
+
+        def _loop():
+            cycle = 0
+            while not self._stopping:
+                if self._any_live_conn():
+                    # 健康时每 3 轮做一次仅通告端口的轻扫，捕捉新生孤立节点
+                    if cycle % 3 == 0:
+                        try:
+                            self._subnet_scan_once(fast_only=True)
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        self._subnet_scan_once(fast_only=False)
+                    except Exception:
+                        pass
+                cycle += 1
+                for _ in range(max(1, int(self._scan_interval))):
+                    if self._stopping:
+                        return
+                    time.sleep(1)
+
+        threading.Thread(target=_loop, daemon=True, name="mesh-subnet-scan").start()
+
+    def _any_live_conn(self) -> bool:
+        with self._conn_lock:
+            return any(c.alive and c.handshake_done
+                       for c in self.connections.values())
+
+    def _scan_subnets(self) -> set[str]:
+        """待扫描网段前缀（去重）：本机接口 + 已知对端主机所在网段。
+
+        本机接口仅能给出本机 /24，但 AP 隔离可能让本机与对端不在同一网段也互连；
+        把已知对端 IP 的 /24 也纳入扫描，可覆盖「跨段但知道地址」的场景。掩码恒按
+        /24 推导为保守假设（无 netmask 的跨平台探测方式受限），重叠前缀自动去重。
+        """
+        prefixes: set[str] = set()
+        from transport.beacon import _all_local_ips
+        candidates = []
+        try:
+            candidates += _all_local_ips()
+        except Exception:
+            pass
+        with self._conn_lock:
+            candidates += [a[0] for a in self._known_addrs.values() if a and a[0]]
+        for ip in candidates:
+            if not ip or ip.startswith("127."):
+                continue
+            bike = ip.rsplit(".", 1)
+            if len(bike) == 2 and bike[0].count(".") == 2:
+                prefixes.add(bike[0])
+        return prefixes
+
+    def _announce_ports(self) -> list[int]:
+        try:
+            base = self.node_core.config.announce_tcp_port
+        except Exception:
+            base = 49700
+        return list(range(base, base + 5))
+
+    def _announce_probe(self, host: str) -> bool:
+        """通告快速通道：拨固定端口读 whoami，拿到真实对等端口后拨 mesh。成功则已建长连。"""
+        for ap in self._announce_ports():
+            if self._stopping or self._has_live_conn_to(host):
+                return self._has_live_conn_to(host)
+            try:
+                s = socket.create_connection((host, ap), timeout=self._scan_timeout)
+            except OSError:
+                continue
+            peer_port = 0
+            try:
+                s.settimeout(2.0)
+                data = s.recv(2048)
+                info = json.loads(data.decode("utf-8", "replace"))
+                peer_port = int(info.get("peer_tcp_port") or 0)
+            except Exception:
+                peer_port = 0
+            finally:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+            if peer_port:
+                conn = self.connect(host, peer_port)
+                if conn and self._wait_done(conn, 2.0):
+                    return True
+            return self._has_live_conn_to(host)
+        return False
+
+    def _subnet_scan_once(self, fast_only: bool = False) -> None:
+        ports = []
+        if not fast_only:
+            try:
+                ports = self.node_core.config.peer_port_range()
+            except Exception:
+                ports = []
+        # 单轮扫描时间预算：fast_only 轻扫预算更小
+        budget = 6.0 if fast_only else 10.0
+        budget_deadline = time.time() + budget
+        prefixes = self._scan_subnets()
+        if not prefixes:
+            return
+        for prefix in sorted(prefixes):
+            if self._stopping:
+                return
+            for node_part in self._scan_node_range:
+                if self._stopping or time.time() > budget_deadline:
+                    return
+                host = f"{prefix}.{node_part}"
+                if self._has_live_conn_to(host):
+                    continue
+                now = time.time()
+                if now < self._scan_cool.get(host, 0):
+                    continue  # 落空冷却中
+                last = self._scan_lasts.get(host, 0)
+                if now - last < 2.0:
+                    continue  # 探测节流
+                self._scan_lasts[host] = now
+                if self._announce_probe(host):
+                    continue  # 快速通道已建立连接
+                if fast_only:
+                    continue  # 轻扫只走通告端口
+                # 回落：段扫（约定对等端口段）
+                for p in ports:
+                    if self._stopping:
+                        return
+                    if self._has_live_conn_to(host):
+                        break
+                    conn = self.connect(host, p, timeout=self._scan_timeout)
+                    if conn is None:
+                        continue
+                    # 等心跳握手（≤ 段内尝试即返回）
+                    if self._wait_done(conn, 2.0):
+                        break
+                # 若没连上，冷却该 host
+                if not self._has_live_conn_to(host):
+                    self._scan_cool[host] = time.time() + 60
+
+    def _wait_done(self, conn, secs: float) -> bool:
+        deadline = time.time() + secs
+        while time.time() < deadline and conn.alive:
+            if conn.handshake_done:
+                return True
+            time.sleep(0.05)
+        return bool(conn.handshake_done)
+
+    def _has_live_conn_to(self, host: str) -> bool:
+        with self._conn_lock:
+            return any(c.alive and c.handshake_done and c.addr and c.addr[0] == host
+                       for c in self.connections.values())
 
     def _register(self, conn: Connection) -> None:
         pid = conn.peer_node_id

@@ -206,16 +206,12 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
 </div>
 
 <div class="view active" id="view-nodes">
-  <h2>已知节点（离线不消失）</h2>
-  <div class="subtabs" id="nodes-subtabs">
-    <a data-ntab="online" class="active">在线</a>
-    <a data-ntab="all">全部</a>
-  </div>
+  <h2>在线节点</h2>
   <div class="card">
     <table id="nodes-table">
       <thead><tr>
         <th>名称</th><th>node_id</th><th>team</th><th>状态</th><th>能力</th>
-        <th>开关</th><th>地址</th><th>上次在线</th><th></th>
+        <th>开关</th><th>地址</th><th>上次在线</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -229,6 +225,16 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
       <span class="hint">被添加方需配置固定 peer_tcp_port</span>
     </div>
     <div id="mp-list"></div>
+  </div>
+  <div class="card">
+    <h3>锚点（入站被隔离时主动出站回连）</h3>
+    <div class="row">
+      <input type="text" id="anch-host" placeholder="IP 或主机名" style="min-width:200px">
+      <input type="number" id="anch-port" placeholder="对等 TCP 端口" style="min-width:140px">
+      <button class="btn primary" onclick="addAnchor()">添加</button>
+      <span class="hint">若本机被路由器 AP 隔离（别人连不上我），配一条锚点即可自愈</span>
+    </div>
+    <div id="anch-list"></div>
   </div>
 </div>
 
@@ -449,6 +455,11 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
       <button class="btn" onclick="cleanupInbox('consumed')">清已读</button>
       <button class="btn danger" onclick="cleanupInbox('expired')">清全部未读</button>
     </div>
+    <div class="row">
+      <label>本机节点</label>
+      <button class="btn danger" onclick="restartNode()">重启节点</button>
+      <span class="hint">保持驻留，面板短暂中断后自动恢复</span>
+    </div>
   </div>
 </div>
 
@@ -573,6 +584,7 @@ async function refreshOverview() {
     $("#tb-notif").textContent = "通知 " + (ov.notifications || []).length;
     renderOverview(ov);
     renderSwitches(ov.switches, "#ov-switches", "#set-switches");
+    loadAnchors();
   } catch (e) { /* 轮询失败静默，下轮重试 */ }
 }
 function renderOverview(ov) {
@@ -617,15 +629,13 @@ async function toggleSwitch(k, v) {
 }
 
 /* ---------- 节点 ---------- */
-let nodesTab = "online";
 async function refreshNodes() {
   try {
     const r = await api("/api/nodes");
     state.nodes = r.nodes || [];
     const tb = $("#nodes-table tbody");
-    /* 按 tab 过滤 + 名称稳定排序（名称相同再按 nodeId 兜底，保证全序稳定，3s 刷新不换位） */
-    const list = (nodesTab === "all" ? state.nodes
-      : state.nodes.filter(n => n.online))
+    /* 仅在线节点（离线即消失）；名称稳定排序（名称相同再按 nodeId 兜底，保证全序稳定） */
+    const list = state.nodes
       .slice()
       .sort((a, b) => {
         const na = String(a.name || ""), nb = String(b.name || "");
@@ -637,41 +647,23 @@ async function refreshNodes() {
         <td><b>${esc(n.name)}</b></td>
         <td class="mono">${esc(n.nodeId)}</td>
         <td>${esc(n.teamId || "—")}</td>
-        <td><span class="badge ${n.online ? "on" : "off"}">${n.online ? "在线" : "离线"}</span></td>
+        <td><span class="badge on">在线</span></td>
         <td>${(n.capabilities || []).map(c => `<span class="badge blue">${esc(c.name || c.agentId)}</span>`).join(" ") || '<span class="hint">—</span>'}</td>
         <td>${["allow_shell","allow_file","allow_ai_task"].map(k =>
           `<span class="badge ${n.switches[k] ? "on" : "off"}" title="${k}">${k.replace("allow_","").slice(0,4)}</span>`).join(" ")}</td>
         <td class="mono">${esc(n.host || "")}:${esc(n.peerTcpPort || "")}</td>
         <td class="mono">${esc((n.lastSeen || "").replace("T", " ").slice(0, 19))}</td>
-        <td>
-          <button class="btn small danger" onclick="forgetNode('${esc(n.nodeId)}')">忘记</button>
-          <button class="btn small danger" ${n.online ? "disabled title=\"在线节点不可删除\"" : ""}
-            onclick="purgeNode('${esc(n.nodeId)}')">删除</button>
-        </td>
-      </tr>`).join("") || '<tr><td colspan="9" class="hint">暂未发现其他节点（等待 beacon，约 2~6 秒）</td></tr>';
+      </tr>`).join("") || '<tr><td colspan="8" class="hint">暂未发现在线节点（等待 beacon，约 2~6 秒）</td></tr>';
     setHtmlIfChanged(tb, html);
     const sel = $("#fb-node");
     const cur = sel.value;
     sel.innerHTML = `<option value="">本机</option>` + state.nodes
-      .filter(n => n.online).map(n => `<option value="${esc(n.nodeId)}">${esc(n.name)} (${esc(n.nodeId)})</option>`).join("");
+      .map(n => `<option value="${esc(n.nodeId)}">${esc(n.name)} (${esc(n.nodeId)})</option>`).join("");
     if (cur) sel.value = cur;
     const ps = $("#log-peer");
     ps.innerHTML = '<option value="">全部对端</option>' + state.nodes
       .map(n => `<option value="${esc(n.nodeId)}">${esc(n.name)}</option>`).join("");
   } catch (e) {}
-}
-function switchNodesTab(tab) {
-  nodesTab = tab;
-  $$("#nodes-subtabs a").forEach(a => a.classList.toggle("active", a.dataset.ntab === tab));
-  refreshNodes();
-}
-document.querySelectorAll("#nodes-subtabs a").forEach(a => {
-  a.addEventListener("click", () => switchNodesTab(a.dataset.ntab));
-});
-async function forgetNode(id) {
-  if (!confirm("忘记该节点？（从已知列表移除，不影响对方）")) return;
-  await api("/api/nodes/forget", { method: "POST", body: JSON.stringify({ node_id: id })});
-  refreshNodes();
 }
 async function purgeNode(id) {
   if (!confirm("彻底删除该节点？\n将清除其节点记录与聊天记录（审计日志保留）；在线节点不可删除。")) return;
@@ -687,6 +679,29 @@ async function addManualPeer() {
   const r = await api("/api/peers/add_manual", {
     method: "POST", body: JSON.stringify({ host, peer_tcp_port: port })});
   toast(r.ok ? "已发起连接" : "添加失败: " + (r.detail || ""), !r.ok);
+}
+async function loadAnchors() {
+  const r = await api("/api/anchors");
+  const list = r.anchors || [];
+  setHtmlIfChanged($("#anch-list"), list.map(a => `
+    <div class="row">
+      <span class="mono">${esc(a.host)}:${esc(a.peer_tcp_port || 0)}</span>
+      <button class="btn small danger" onclick="removeAnchor('${esc(a.host)}')">移除</button>
+    </div>`).join("") || '<span class="hint">暂无锚点（被隔离时添加一条即可自愈）</span>');
+}
+async function addAnchor() {
+  const host = $("#anch-host").value.trim(), port = parseInt($("#anch-port").value) || 0;
+  if (!host || !port) return toast("请填写 host 与端口", true);
+  const r = await api("/api/anchors/add", {
+    method: "POST", body: JSON.stringify({ host, peer_tcp_port: port })});
+  toast(r.ok ? "已添加锚点" : "添加失败: " + (r.detail || ""), !r.ok);
+  loadAnchors();
+}
+async function removeAnchor(host) {
+  const r = await api("/api/anchors/remove", {
+    method: "POST", body: JSON.stringify({ host })});
+  toast(r.ok ? "已移除锚点" : "移除失败: " + (r.detail || ""), !r.ok);
+  loadAnchors();
 }
 
 /* ---------- 聊天 ---------- */
@@ -1182,6 +1197,13 @@ async function cleanupInbox(mode) {
   const r = await api("/api/mailbox/cleanup", { method: "POST", body: JSON.stringify({ mode })});
   toast(`已清理 ${r.deleted} 条`);
   loadAinbox();
+}
+async function restartNode() {
+  if (!confirm("确认重启本机节点？\n面板会短暂中断，约 5~10 秒后自动恢复。")) return;
+  const r = await api("/api/node/restart", { method: "POST", body: "{}" });
+  if (!r.ok) { toast("重启失败: " + (r.detail || ""), true); return; }
+  toast("正在重启本机节点…");
+  setTimeout(() => { try { location.reload(); } catch (e) {} }, 6000);
 }
 
 /* ---------- 轮询主循环（3s 局部数据轮询，2.1.6/4.4） ---------- */
