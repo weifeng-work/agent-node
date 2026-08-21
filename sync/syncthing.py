@@ -56,7 +56,10 @@ class SyncManager:
         # （2.4.7 二进制随包分发；install.ps1 源码 zip 不内嵌 exe，故启动时兜底部署。
         #   部署 bin 目录约定 = data_dir 同级 bin/，见 node/core.py:88 对随包二进制的定位）
         if not self.bin.is_file():
-            candidates = [self.node_core.data_dir.parent / "bin" / self.bin.name]
+            base = self.node_core.data_dir.parent
+            # 兼容两种部署布局：源码/演进布局 data_dir 同级 bin/；install 布局 app/bin/
+            candidates = [base / "bin" / self.bin.name,
+                          base / "app" / "bin" / self.bin.name]
             deployed = None
             for c in candidates:
                 if c.is_file():
