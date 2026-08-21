@@ -32,6 +32,42 @@ function Get-PanelUrl {
 }
 function Open-Panel { try { Start-Process (Get-PanelUrl) } catch {} }
 
+# 启动后自检：同一 data 目录出现多个 node.main 进程时，只保留持有锁（真正服务面板）的那个，
+# 杀掉其余双胞胎。根治"venv 启动器带出系统 Python 副本"等导致的同名重复进程。
+function Remove-DuplicateNode {
+    if (-not (Test-Path $LOCK)) { return }
+    try { $lockPid = [int]((Get-Content $LOCK -Raw).Trim()) } catch { return }
+    if ($lockPid -le 0) { return }
+    $target = $DATA.ToLower()
+    $procs = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' or Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*node.main*" -and $_.CommandLine.ToLower().Contains($target) }
+    foreach ($p in $procs) {
+        if ($p.ProcessId -eq $lockPid) { continue }
+        Write-Host ("  清除重复节点进程 PID=" + $p.ProcessId + "（保留服务 PID=" + $lockPid + "）") -ForegroundColor Yellow
+        try { & taskkill /PID $p.ProcessId /F 2>$null | Out-Null } catch {}
+    }
+}
+
+function Resolve-NodeLauncher {
+    # 优先用「基础 pythonw + venv site-packages」启动（单进程）。
+    # 不用 venv\Scripts\pythonw.exe 直启：部分环境它是转发器，会额外带出系统 Python 副本造成双进程。
+    try {
+        $cfg = Join-Path $ROOT "venv\pyvenv.cfg"
+        if (Test-Path $cfg) {
+            $home = (Get-Content $cfg | Where-Object { $_ -like "home = *" } | Select-Object -First 1) -replace '^home\s*=\s*', ''
+            if ($home) { $p = Join-Path $home "pythonw.exe"; if (Test-Path $p) { return $p } }
+        }
+    } catch {}
+    $c = Get-Command python -ErrorAction SilentlyContinue
+    if ($c) { $pw = Join-Path (Split-Path $c.Source) "pythonw.exe"; if (Test-Path $pw) { return $pw } }
+    return $PYW  # 兜底：venv pythonw
+}
+function Get-VenvSitePackages {
+    $sp = Join-Path $ROOT "venv\Lib\site-packages"
+    if (Test-Path $sp) { return $sp }
+    return ""
+}
+
 function Start-Node {
     if (Is-Running) { Write-Host "节点已在运行，打开面板…"; Open-Panel; return }
     if (-not (Test-Path $PYW)) {
@@ -40,8 +76,16 @@ function Start-Node {
         exit 1
     }
     if (Test-Path $URL) { Remove-Item $URL -Force -ErrorAction SilentlyContinue }
+    $launcher = Resolve-NodeLauncher
+    $sp = Get-VenvSitePackages
+    $saved = $env:PYTHONPATH
+    if ($sp) { $env:PYTHONPATH = if ($saved) { "$sp;$saved" } else { $sp } }
     Write-Host "正在启动节点（后台常驻，请稍候…）"
-    Start-Process -FilePath $PYW -ArgumentList @("-m","node.main","--data-dir",$DATA) -WorkingDirectory $APP
+    Start-Process -FilePath $launcher -ArgumentList @("-m","node.main","--data-dir",$DATA) -WorkingDirectory $APP
+    $env:PYTHONPATH = $saved
+    # 自检兜底：若仍有同 data 的多余节点进程，保留锁（服务）者
+    Start-Sleep -Seconds 3
+    Remove-DuplicateNode
     $dl = (Get-Date).AddSeconds(40)
     while ((Get-Date) -lt $dl) {
         Start-Sleep -Seconds 1
