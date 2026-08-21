@@ -1,19 +1,16 @@
-# agent-node 自动发布：打 tag → 构建 → npm(OIDC) + Windows 便携运行时附件
+# agent-node 自动发布：打 tag → 构建 → OIDC Trusted Publishing 发布到 npm
 #
 # 触发方式:
 #   git tag v0.1.1 && git push --tags
 #   或 GitHub → Releases → 选 "v0.1.1" tag → Publish release
 #
-# npm:  用 GitHub OIDC 身份与 npm 交换短期凭证（Trusted Publishing），无需 token。
-# 前提: npmjs.com 给本包配置 Trusted Publisher，绑定 Owner=weifeng-work / Repo=agent-node /
-#       Workflow=agent-node-release.yml
-# 运行时: 在 windows-latest 上用 build_runtime.py 打"内置便携 Python"zip，作为 Release 附件，
-#       供零环境一键安装 install.ps1 下载。
+# 无需任何 npm token —— 用 GitHub OIDC 身份直接与 npm 交换短期凭证（Trusted Publishing）。
+# 前提: 需在 npmjs.com 给本包配置 Trusted Publisher，绑定：
+#   Owner = weifeng-work / Repository = agent-node / Workflow = agent-node-release.yml
 #
 # 注意:
-#   - 不要让 actions/setup-node 传 registry-url（会写 .npmrc 的 token 行，与 OIDC 冲突）
-#   - id-token: write 才能交换 OIDC token
-#   - contents: write 才能上传 Release 附件
+#   - 不要给 actions/setup-node 传 registry-url（会写 .npmrc 的 token 行，与 OIDC 冲突）
+#   - 必须声明 permissions.id-token: write 才能交换 OIDC token
 #   - npm >= 11.5.1、Node >= 22.14（由 setup-node 提供）
 name: agent-node release
 
@@ -24,7 +21,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # 上传 Release 附件
+  contents: read
   id-token: write   # OIDC 必需
 
 jobs:
@@ -54,40 +51,3 @@ jobs:
 
       - name: Release to npm (OIDC)
         run: bash scripts/release.sh "${{ steps.tag.outputs.tag }}"
-
-  # ---- Windows 便携运行时（零环境一键装所需；必须在 Windows 上 pip install 才能生成 .exe 的轮子） ----
-  runtime:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python (driver)
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Get tag version
-        id: tag
-        shell: pwsh
-        run: |
-          $t = $env:GITHUB_REF -replace '^refs/tags/',''
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$t"
-
-      - name: Build runtime zip
-        shell: pwsh
-        run: python scripts/build_runtime.py
-
-      - name: Attach runtime asset to release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "${{ steps.tag.outputs.tag }}"
-          $asset = "dist\agent-node-runtime-windows-x64.zip"
-          gh release create $tag $asset --title $tag --generate-notes 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            gh release upload $tag $asset --clobber
-          }
