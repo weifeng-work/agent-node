@@ -46,69 +46,45 @@ python -m node.main --data-dir data
 | Command | Description |
 |---|---|
 | `agent-node` | Start node (or open panel if already running) |
+| `agent-node start` | Start node |
 | `agent-node stop` | Stop node |
 | `agent-node status` | Show status |
-| `agent-node setup` | Install or repair |
-| `agent-node uninstall` | Full uninstall (incl. data dir) |
+| `agent-node restart` | Restart node (stays resident) |
+| `agent-node update` | Update node code & dependencies |
 | `agent-node help` | Help |
+| `agent-node --help` | Full cli.py subcommand list |
+| `agent-node <subcommand>` | AI capabilities (info/list/executors/task/...) |
 
-## Let an AI use this node
+## Let AI use this node
 
-Two equivalent access methods:
+Unified access through the `agent-node` global command. Any AI that can execute shell commands can use all capabilities.
 
-### Method A: MCP (recommended)
+### Method A: MCP (deprecated, no longer recommended)
 
-Add this JSON to your AI client (e.g. Claude Desktop):
+> MCP access is deprecated and no longer maintained. The mcp/server.py source is preserved but not updated.
+> Use Method B (CLI commands) instead — fully equivalent functionality with zero client configuration.
 
-```json
-{
-  "mcpServers": {
-    "agent-node": {
-      "command": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/venv/Scripts/python.exe",
-      "args": ["-m", "mcp.server"],
-      "cwd": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/app",
-      "env": {
-        "AGENT_NODE_PANEL": "http://127.0.0.1:5177"
-      }
-    }
-  }
-}
-```
-
-> `5177` in `AGENT_NODE_PANEL` is the **default** panel port; if occupied the node
-> automatically switches to 5178… — the actual address is shown by `agent-node status`.
-
-`caller_id` (the identity key for your private async-receipt inbox) is derived
-automatically: the MCP server reads its parent process executable name
-(e.g. workbuddy/trae) at startup — no config needed, distinct clients on the
-same machine never collide. 30+ tools built in.
-
-### Method B: CLI
+### Method B: CLI (only access method, recommended)
 
 ```bash
-python -m tools.cli register        # create identity
-python -m tools.cli list            # list nodes & executors
-python -m tools.cli task --target <node_id> --executor workbuddy --prompt "a task for WorkBuddy"
-python -m tools.cli push-dir --root <dir> --to <node_id> --target inbox/migrated   # push whole directory tree (no packing)
+agent-node register                    # register identity (once only)
+agent-node list                        # list online nodes
+agent-node info                        # local node overview
+agent-node task --target <node_id> --executor workbuddy --prompt "a task for WorkBuddy"
+agent-node mailbox                     # fetch async receipts
+agent-node --help                      # full subcommand list
 ```
 
 ### Have any AI drive this node
 
-Send one of these messages to any AI agent; it will read the built-in manual and guide you
-(pick the one matching how the agent connects):
+Send this to any AI agent; it will read the manual, install itself, and start:
 
-- **MCP-connected agent** (has the `get_skill` tool):
-> Use the `get_skill` tool (optionally with doc=) to read the node's built-in manual
-> skill/SKILL.md, learn how to use the agent-node node, then tell me:
-> which executors are available locally? How do I call remote agents?
-
-- **CLI-only agent** (Bash/terminal, no get_skill tool):
 > First read the agent-node skill manual, then tell me:
 > which executors are available locally? How do I call remote agents?
 > Where to get the manual (any option):
 > · Read it online: https://raw.githubusercontent.com/weifeng-work/agent-node/main/skill/SKILL.md
-> · Already installed (Windows one-line install): `%LOCALAPPDATA%\agent-node\app\skill\SKILL.md`
-> · Source tree: `skill/SKILL.md` at the repo root
+> · Already installed (Windows one-click): `%LOCALAPPDATA%\agent-node\app\skill\SKILL.md`
+> · Source code: `skill\SKILL.md` in the repo root
 
 ## What you can do after MCP
 
@@ -126,7 +102,7 @@ Each node (self-hosted LAN, plaintext, fully open):
 │ Node Core (UDP beacon + TCP mesh)            │
 │ Executor Registry (CodeBuddy/WorkBuddy/...)  │
 │ File control · Chat · Shell · Syncthing      │
-│ Web Panel (FastAPI) + MCP Server + CLI       │
+│ Web Panel (FastAPI) + CLI (agent-node global command)   │
 └──────────────────────────────────────────────┘
 ```
 

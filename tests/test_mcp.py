@@ -1,8 +1,9 @@
-"""集成测试: MCP Server（stdio JSON-RPC 薄桥 → 面板 REST → 节点核心）。
+"""集成测试: MCP Server（已废弃，不再维护）。
 
 以子进程拉起 `python -m mcp.server`（模拟 AI 客户端 stdio 方式，2.6.3），
 验证 initialize 握手 / tools/list / tools/call / caller_id 收件箱归属（caller_id 由父进程名自动派生，无需配置）。
 """
+import pytest
 import json
 import os
 import subprocess
@@ -19,6 +20,7 @@ from node.core import NodeCore
 PORT = 5291
 
 
+@unittest.skip("MCP 已废弃，见 docs/去MCP化迁移方案.md")
 class TestMcpServer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

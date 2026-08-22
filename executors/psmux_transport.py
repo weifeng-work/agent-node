@@ -138,9 +138,13 @@ class PsmuxTransport:
     def attach_visible(self, name: str) -> bool:
         """打开人类可见的交互附着窗口（独立控制台，观察 TUI 对话流）。
 
-        Windows 实现注意（实测坑）: 命令含嵌套引号（路径带引号）时，
-        Python list2cmdline 的二次转义与 cmd /S 解析冲突 → cmd 启动即失败、
-        窗口闪退。故改用**批处理文件**中转: cmd /c <batch>，零嵌套引号。
+        Windows 实现注意（实测坑）:
+        - 命令含嵌套引号（路径带引号）时，Python list2cmdline 的二次转义与
+          cmd /S 解析冲突 → cmd 启动即失败、窗口闪退。故用批处理文件中转。
+        - 中文字符（UTF-8 输出）在 cmd 默认 GBK 代码页下会被宽字符挤成一团，
+          故在控制台内先 `chcp 65001` 显式切到 UTF-8（2.2.6 可见性修复）。
+        - 窗口宿主用 PowerShell（pwsh/windows powershell）：提示符、配色与
+          中文渲染优于 cmd，且仍是新建独立控制台（CREATE_NEW_CONSOLE）。
         """
         if not self.available:
             return False
@@ -150,14 +154,22 @@ class PsmuxTransport:
             batch = Path(tempfile.gettempdir()) / f"agn_attach_{safe}.cmd"
             batch.write_text(
                 "@echo off\r\n"
+                "@chcp 65001 >nul\r\n"
                 f"title {safe}\r\n"
                 f"mode con cols={COLS} lines={ROWS}\r\n"
                 f'"{self.binary}" attach-session -t {name}\r\n',
                 encoding="ascii")
+            # 宿主 PowerShell：新控制台窗口（CREATE_NEW_CONSOLE）加载 .cmd，
+            # 获得 UTF-8 代码页 + PowerShell 风格窗口。
+            powershell = next((p for p in ("pwsh.exe", "powershell.exe")
+                               if shutil.which(p)), None)
+            if not powershell:
+                return False
             try:
-                subprocess.Popen(["cmd.exe", "/c", str(batch)],
-                                 env=self._env,
-                                 creationflags=_CREATE_NEW_CONSOLE)
+                subprocess.Popen(
+                    [powershell, "-NoLogo", "-NoExit", "-Command",
+                     f'& {{ chcp 65001 | Out-Null; cmd /c "{batch}" }}'],
+                    env=self._env, creationflags=_CREATE_NEW_CONSOLE)
                 return True
             except Exception:
                 return False

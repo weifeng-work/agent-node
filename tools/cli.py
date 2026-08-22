@@ -7,15 +7,36 @@
     task --target <node_id> --executor <agent_id> --prompt "..." [--mode async]
          [--timeout 600] [--attach file1,file2] [--task-id <幂等键>]
     check --task <task_id>       查询任务结果
-    inbox                        取异步邮箱回执（旧名；已更名 mailbox）
+    inbox                        取异步邮箱回执（旧名，同 mailbox）
     mailbox                      取异步邮箱回执
+    mailbox-all [--limit]        邮箱全量（监控视角）
+    mailbox-clean --mode consumed|expired [--before]  清理邮箱
     upload --to <node_id> --file <本地路径> [--target <目标路径>]
     download --from <node_id> --path <远程路径>   （拉到本机收件目录）
     ls --node <node_id> --path <路径> [--recursive]
     shell --to <node_id> --cmd "command"
-    anchor list | add <host> [port] | remove <host>   # 锚点（被隔离节点出站回连）
+    anchor list | add <host> [port] | remove <host>   # 锚点
     sync                         触发同步
     diag                         一键健康自检（2.17.7）
+    info                         本机节点概览
+    config                       读本机配置
+    rename <name>                节点改名
+    team <team_id>               设置/切换 team
+    switch <allow_shell|allow_file|allow_ai_task> <on|off>  三开关
+    admin <on|off>               管理员权限
+    peer add <host> <port>       手动加对端
+    peer remove <host>           手动删对端
+    conversations                会话列表
+    history --peer <node_id> [--limit]  会话历史
+    executor status <id>         执行器深态
+    executor suspend <id> --on|--off [--reason] [--until]  挂起/恢复
+    executor restart <id>        重启插件
+    executor rename <id> <name>  执行器改名
+    executor sessions [<id>]     交互式会话列表
+    comm-log [--peer] [--direction] [--type] [--corr] [--limit]  通信日志
+    node-log [--source] [--lines] [--level]  节点运行日志
+    plugins                      列出磁盘插件
+    plugin push --node <id> --path <file>  分发插件
 
 环境变量:
     AGENT_NODE_PANEL   面板地址（默认 http://127.0.0.1:5177）
@@ -68,7 +89,7 @@ def out(obj: dict) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cli.py", description="agent-node CLI 接入工具")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -89,6 +110,11 @@ def main() -> int:
     sp.add_argument("--task", required=True)
     sp = sub.add_parser("inbox", help="取异步邮箱回执（旧名，同 mailbox）")
     sub.add_parser("mailbox", help="取异步邮箱回执")
+    sp = sub.add_parser("mailbox-all", help="邮箱全量（监控视角）")
+    sp.add_argument("--limit", type=int, default=None, help="限制条数")
+    sp = sub.add_parser("mailbox-clean", help="清理邮箱")
+    sp.add_argument("--mode", required=True, choices=["consumed", "expired"])
+    sp.add_argument("--before", default=None, help="时间戳/ISO 时间")
     sp = sub.add_parser("upload")
     sp.add_argument("--to", default="")
     sp.add_argument("--file", required=True)
@@ -123,7 +149,78 @@ def main() -> int:
     sub.add_parser("diag")
     sp = sub.add_parser("executors", help="执行器列表")
 
-    a = p.parse_args()
+    # === 新增：本机 ===
+    sub.add_parser("info", help="本机节点概览")
+    sub.add_parser("config", help="读本机配置")
+    sp = sub.add_parser("rename")
+    sp.add_argument("name")
+    sp = sub.add_parser("team")
+    sp.add_argument("team_id")
+    sp = sub.add_parser("switch")
+    sp.add_argument("name", choices=["allow_shell", "allow_file", "allow_ai_task"])
+    sp.add_argument("value", choices=["on", "off"])
+    sp = sub.add_parser("admin")
+    sp.add_argument("value", choices=["on", "off"])
+
+    # === 新增：节点(peer) ===
+    sp = sub.add_parser("peer", help="对端管理")
+    psp = sp.add_subparsers(dest="action", required=True)
+    sp_add = psp.add_parser("add")
+    sp_add.add_argument("host")
+    sp_add.add_argument("port", type=int, help="对端 TCP 端口")
+    sp_rm = psp.add_parser("remove")
+    sp_rm.add_argument("host")
+
+    # === 新增：聊天 ===
+    sub.add_parser("conversations", help="会话列表")
+    sp = sub.add_parser("history")
+    sp.add_argument("--peer", required=True)
+    sp.add_argument("--limit", type=int, default=None)
+
+    # === 新增：执行器 ===
+    sp = sub.add_parser("executor", help="执行器管理")
+    esp = sp.add_subparsers(dest="action", required=True)
+    sp_st = esp.add_parser("status")
+    sp_st.add_argument("id")
+    sp_su = esp.add_parser("suspend")
+    sp_su.add_argument("id")
+    sp_su.add_argument("--on", dest="suspend_on", action="store_true",
+                      help="挂起执行器")
+    sp_su.add_argument("--off", dest="suspend_off", action="store_true",
+                      help="恢复执行器")
+    sp_su.add_argument("--reason", default=None)
+    sp_su.add_argument("--until", default=None)
+    sp_re = esp.add_parser("restart")
+    sp_re.add_argument("id")
+    sp_rn = esp.add_parser("rename")
+    sp_rn.add_argument("id")
+    sp_rn.add_argument("name")
+    sp_se = esp.add_parser("sessions")
+    sp_se.add_argument("id", nargs="?", default=None)
+
+    # === 新增：日志 ===
+    sp = sub.add_parser("comm-log", help="通信日志")
+    sp.add_argument("--peer", default=None)
+    sp.add_argument("--direction", default=None)
+    sp.add_argument("--type", default=None)
+    sp.add_argument("--corr", default=None)
+    sp.add_argument("--limit", type=int, default=None)
+    sp = sub.add_parser("node-log", help="节点运行日志")
+    sp.add_argument("--source", default=None, choices=["node", "executor", "syncthing"])
+    sp.add_argument("--lines", type=int, default=None)
+    sp.add_argument("--level", default=None)
+
+    # === 新增：插件 ===
+    sub.add_parser("plugins", help="列出磁盘插件")
+    sp = sub.add_parser("plugin", help="插件管理")
+    plsp = sp.add_subparsers(dest="action", required=True)
+    sp_pp = plsp.add_parser("push")
+    sp_pp.add_argument("--node", required=True)
+    sp_pp.add_argument("--path", required=True)
+
+    a = p.parse_args(argv if argv is not None else None)
+
+    # ─── 已有命令 ───
     if a.cmd == "register":
         import uuid
         CALLER_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +249,14 @@ def main() -> int:
         out(call("GET", f"/api/task/result?task_id={urllib.parse.quote(a.task)}"))
     elif a.cmd in ("inbox", "mailbox"):
         out(call("GET", "/api/mailbox"))
+    elif a.cmd == "mailbox-all":
+        q = f"?limit={a.limit}" if a.limit else ""
+        out(call("GET", "/api/mailbox/all" + q))
+    elif a.cmd == "mailbox-clean":
+        body = {"mode": a.mode}
+        if a.before:
+            body["before"] = a.before
+        out(call("POST", "/api/mailbox/cleanup", body))
     elif a.cmd == "upload":
         out(call("POST", "/api/files/push", {
             "node_id": a.to or None, "local_path": a.file, "target_path": a.target}))
@@ -171,7 +276,6 @@ def main() -> int:
             "target_node_id": a.to or None, "command": a.command,
             "timeout": a.timeout}))
     elif a.cmd == "node-update":
-        # 远程更新目标节点代码：经 shell_exec 调对端 agent-node update
         r = call("POST", "/api/shell", {
             "target_node_id": a.node, "command": "agent-node update",
             "timeout": a.timeout})
@@ -195,6 +299,93 @@ def main() -> int:
         out(call("GET", "/api/diag"))
     elif a.cmd == "executors":
         out(call("GET", "/api/executors"))
+
+    # ─── 新增：本机 ───
+    elif a.cmd == "info":
+        out(call("GET", "/api/overview"))
+    elif a.cmd == "config":
+        out(call("GET", "/api/settings"))
+    elif a.cmd == "rename":
+        out(call("POST", "/api/settings/name", {"name": a.name}))
+    elif a.cmd == "team":
+        out(call("POST", "/api/settings/team", {"team_id": a.team_id}))
+    elif a.cmd == "switch":
+        out(call("POST", "/api/settings/switch",
+                 {"switch": a.name, "enabled": a.value == "on"}))
+    elif a.cmd == "admin":
+        out(call("POST", "/api/settings/admin", {"enabled": a.value == "on"}))
+
+    # ─── 新增：节点(peer) ───
+    elif a.cmd == "peer":
+        if a.action == "add":
+            out(call("POST", "/api/peers/add_manual",
+                     {"host": a.host, "peer_tcp_port": a.port}))
+        elif a.action == "remove":
+            out(call("POST", "/api/peers/remove_manual", {"host": a.host}))
+
+    # ─── 新增：聊天 ───
+    elif a.cmd == "conversations":
+        out(call("GET", "/api/chat/conversations"))
+    elif a.cmd == "history":
+        q = f"?peer={urllib.parse.quote(a.peer)}"
+        if a.limit:
+            q += f"&limit={a.limit}"
+        out(call("GET", "/api/chat/history" + q))
+
+    # ─── 新增：执行器 ───
+    elif a.cmd == "executor":
+        if a.action == "status":
+            out(call("GET", f"/api/executors/status?executor_id={urllib.parse.quote(a.id)}"))
+        elif a.action == "suspend":
+            if a.suspend_on and a.suspend_off:
+                print("[错误] --on 与 --off 不能同时使用", file=sys.stderr)
+                return 1
+            if not a.suspend_on and not a.suspend_off:
+                print("[错误] 必须指定 --on 或 --off", file=sys.stderr)
+                return 1
+            body = {"executor_id": a.id, "suspend": a.suspend_on}
+            if a.reason:
+                body["reason"] = a.reason
+            if a.until:
+                body["until"] = a.until
+            out(call("POST", "/api/executors/suspend", body))
+        elif a.action == "restart":
+            out(call("POST", "/api/executors/restart", {"executor_id": a.id}))
+        elif a.action == "rename":
+            out(call("POST", "/api/executors/rename",
+                     {"executor_id": a.id, "new_name": a.name}))
+        elif a.action == "sessions":
+            url = "/api/executors/sessions"
+            if a.id:
+                url += f"?executor_id={urllib.parse.quote(a.id)}"
+            out(call("GET", url))
+
+    # ─── 新增：日志 ───
+    elif a.cmd == "comm-log":
+        params = {}
+        if a.peer: params["peer"] = a.peer
+        if a.direction: params["direction"] = a.direction
+        if a.type: params["type"] = a.type
+        if a.corr: params["correlation_id"] = a.corr
+        if a.limit: params["limit"] = a.limit
+        q = "?" + urllib.parse.urlencode(params) if params else ""
+        out(call("GET", "/api/logs/comm" + q))
+    elif a.cmd == "node-log":
+        params = {}
+        if a.source: params["source"] = a.source
+        if a.lines: params["lines"] = a.lines
+        if a.level: params["level"] = a.level
+        q = "?" + urllib.parse.urlencode(params) if params else ""
+        out(call("GET", "/api/logs/node" + q))
+
+    # ─── 新增：插件 ───
+    elif a.cmd == "plugins":
+        out(call("GET", "/api/plugins"))
+    elif a.cmd == "plugin":
+        if a.action == "push":
+            out(call("POST", "/api/plugins/distribute", {
+                "target_node_id": a.node, "plugin_path": a.path}))
+
     return 0
 
 

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import logging
 import os
 import socket
@@ -123,6 +124,7 @@ class NodeCore:
         self._dedup_msgs: dict[str, deque] = {}     # sender -> 近期 msg_id（2.13.4）
         self._stopping = False
         self._lock_file = None
+        self._mutex_handle = None  # Windows 内核互斥句柄（2.11.3 单实例加固）
 
     # ---------- 日志（2.9.7 node.log） ----------
     def _init_logging(self) -> None:
@@ -131,8 +133,10 @@ class NodeCore:
         self.logger.setLevel(logging.INFO)
         self.logger.propagate = False
         if not self.logger.handlers:
+            from logging.handlers import RotatingFileHandler
             fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-            fh = logging.FileHandler(self.log_path, encoding="utf-8")
+            fh = RotatingFileHandler(self.log_path, maxBytes=10 * 1024 * 1024,
+                                     backupCount=5, encoding="utf-8")
             fh.setFormatter(fmt)
             self.logger.addHandler(fh)
             sh = logging.StreamHandler()
@@ -277,25 +281,66 @@ class NodeCore:
             return {"ok": False, "error": "agent_error", "detail": f"重启失败: {e}"}
 
     # ---------- 单实例 + 异常退出检测（2.11.3 / 2.12.2） ----------
+    def _acquire_kernel_mutex(self) -> None:
+        """Windows 内核 Mutex 原子互斥（2.11.3 加固）。
+
+        旧实现仅靠 node.lock 的 check-then-act（先读 PID 判断再写文件），
+        并发启动时两个进程可各自通过检查、双双驻留。这里用 CreateMutexW：
+        同名互斥量已被其它进程占用时返回句柄并置 ERROR_ALREADY_EXISTS，
+        据此**原子地**拒绝重复启动，杜绝竞态。非 win32 平台退化（返回 None）。
+        """
+        if sys.platform != "win32":
+            return
+        ERROR_ALREADY_EXISTS = 183
+        mutex_name = "AgentNode_" + hashlib.sha1(
+            str(self.data_dir).encode("utf-8", "replace")).hexdigest()[:24]
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        CreateMutexW = kernel32.CreateMutexW
+        CreateMutexW.restype = ctypes.c_void_p
+        CreateMutexW.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        # bInitialOwner=False：我们从不主动带锁，互斥量仅在"是否存在/被占用"上有意义；
+        # 命名互斥量在最后一个句柄关闭后由内核自动销毁，保证释放后可重新创建。
+        handle = CreateMutexW(None, False, mutex_name)
+        err = ctypes.get_last_error()
+        if not handle:
+            raise RuntimeError("创建单实例内核互斥量失败（CreateMutexW）")
+        if err == ERROR_ALREADY_EXISTS:
+            raise RuntimeError("节点已在运行（内核互斥量独占，2.11.3 单实例保护）")
+        self._mutex_handle = handle
+
     def _acquire_single_instance(self) -> None:
+        # 第一道：内核 Mutex 原子互斥（并发竞态下保证唯一）
+        self._acquire_kernel_mutex()
+        # 第二道：node.lock 原子创建（O_EXCL），兼做异常退出检测/人类可读
         lock_path = self.data_dir / "node.lock"
-        if lock_path.exists():
-            stale = True
+        for _ in range(3):
             try:
-                old_pid = int(lock_path.read_text().strip() or 0)
-                if old_pid and _pid_alive(old_pid):
-                    stale = False
-                    raise RuntimeError(f"节点已在运行 pid={old_pid}（2.11.3 单实例保护）")
-            except ValueError:
-                pass
-            if stale:
-                # 上次异常退出（锁残留），提示人类（2.12.2）
-                self.log("warning", "检测到上次节点异常退出（node.lock 残留），"
-                                    "请检查 data/node.log 或让本机 AI 读取日志排查")
-                self._notify("warning", "上次节点异常退出——请检查 node.log 排查原因")
-                self._crash_alert()
-                lock_path.unlink(missing_ok=True)
-        self._lock_file = open(lock_path, "w", encoding="utf-8")
+                fd = os.open(
+                    lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                break
+            except FileExistsError:
+                # 锁已存在：判断存活 / 残留
+                stale = True
+                try:
+                    old_pid = int(lock_path.read_text().strip() or 0)
+                    if old_pid and _pid_alive(old_pid):
+                        stale = False
+                        raise RuntimeError(
+                            f"节点已在运行 pid={old_pid}（2.11.3 单实例保护）")
+                except ValueError:
+                    pass
+                if stale:
+                    # 上次异常退出（锁残留），提示人类（2.12.2）
+                    self.log("warning", "检测到上次节点异常退出（node.lock 残留），"
+                                        "请检查 data/node.log 或让本机 AI 读取日志排查")
+                    self._notify("warning", "上次节点异常退出——请检查 node.log 排查原因")
+                    self._crash_alert()
+                    lock_path.unlink(missing_ok=True)
+                    continue  # 清理后重试原子创建
+        else:
+            raise RuntimeError("创建单实例锁 node.lock 失败（并发冲突，2.11.3）")
+        self._lock_file = os.fdopen(fd, "w", encoding="utf-8")
         self._lock_file.write(str(os.getpid()))
         self._lock_file.flush()
 
@@ -303,6 +348,12 @@ class NodeCore:
         try:
             if self._lock_file:
                 self._lock_file.close()
+            if self._mutex_handle:
+                kernel32 = ctypes.windll.kernel32
+                kernel32.CloseHandle.restype = ctypes.c_int
+                kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+                kernel32.CloseHandle(self._mutex_handle)
+                self._mutex_handle = None
             if clean:
                 (self.data_dir / "node.lock").unlink(missing_ok=True)
         except Exception:
@@ -900,6 +951,7 @@ class NodeCore:
         return {
             "nodeId": self.node_id,
             "version": VERSION,
+            "pid": os.getpid(),
             "name": self.config.name,
             "teamId": self.config.team_id,
             "host": socket.gethostname(),

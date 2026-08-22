@@ -88,6 +88,7 @@ class ExecutorRegistry:
         self.available: dict[str, bool] = {}
         self.tasks: dict[str, TaskRecord] = {}
         self._lock = threading.RLock()
+        self._is_done_err: dict[str, int] = {}  # task_id -> is_done 连续异常次数（3 次快速失败）
         self._queues: dict[str, list[str]] = {}  # agent_id -> 排队 task_id（TUI/GUI）
         self._workers: dict[str, threading.Thread] = {}
         self._cli_sems: dict[str, threading.BoundedSemaphore] = {}
@@ -403,7 +404,12 @@ class ExecutorRegistry:
             return
         # 超时兜底
         if time.time() > record.deadline:
-            rp = plugin.get_result(record.task_id)
+            try:
+                rp = plugin.get_result(record.task_id)
+            except Exception as e:
+                self.node_core.log("warning", f"executor get_result 异常(超时兜底) {record.task_id[:8]}: {e!r}")
+                self._finalize(record, False, "agent_error", f"get_result 异常: {e!r}")
+                return
             if rp.ok and rp.content:
                 self._finalize(record, True, None, None, rp.content)
             else:
@@ -411,8 +417,7 @@ class ExecutorRegistry:
                                f"任务超时（>{record.timeout:.0f}s），返回已观察部分",
                                rp.content if rp and rp.content else None)
             return
-        done_flag = False
-        # 结果文件存在 + 大小稳定（2.2.11）
+        # 结果文件存在 + 大小稳定（2.2.11 权威完成信号）
         if record.result_file.exists():
             try:
                 size = record.result_file.stat().st_size
@@ -424,21 +429,35 @@ class ExecutorRegistry:
                 record.stable_count = 0
                 record.last_size = size
             if record.stable_count >= SIZE_STABLE_ROUNDS:
-                done_flag = True
-        # 插件信号（如 WorkBuddy UIA 完成按钮）
+                try:
+                    rp = plugin.get_result(record.task_id)
+                except Exception as e:
+                    self.node_core.log("warning",
+                                       f"executor get_result 异常(文件就绪) {record.task_id[:8]}: {e!r}")
+                    self._finalize(record, False, "agent_error", f"get_result 异常: {e!r}")
+                    return
+                if rp.ok and rp.content:
+                    self._finalize(record, True, None, None, rp.content)
+                else:
+                    # 文件就绪但一时读不到内容 → 再等一轮（写入中）
+                    record.stable_count = 0
+                    record.deadline = max(record.deadline, time.time() + 15)
+                return
+        # 结果文件尚未生成：插件 is_done（UIA/DOM 信号）仅作探活提示，不据此完成。
+        # 回归结果文件契约——防止过早返回（2.2.11）；完成只认文件或超时兜底。
         try:
-            if plugin.is_done(record.task_id):
-                done_flag = True
-        except Exception:
-            pass
-        if done_flag:
-            rp = plugin.get_result(record.task_id)
-            if rp.ok and rp.content:
-                self._finalize(record, True, None, None, rp.content)
-            else:
-                # 信号完成但无内容 → 再等一轮（写入中/回执尚未落盘）
-                record.stable_count = 0
-                record.deadline = max(record.deadline, time.time() + 15)
+            plugin.is_done(record.task_id)
+        except Exception as e:
+            with self._lock:
+                n = self._is_done_err.get(record.task_id, 0) + 1
+                self._is_done_err[record.task_id] = n
+            if n >= 3:
+                self.node_core.log("warning",
+                                   f"executor is_done 连续异常 {n} 次，任务 {record.task_id[:8]} 提前失败: {e!r}")
+                self._finalize(record, False, "agent_error", f"is_done 连续异常: {e!r}")
+                return
+            self.node_core.log("warning",
+                               f"executor is_done 异常(第 {n} 次) {record.agent_id}/{record.task_id[:8]}: {e!r}")
 
     def _finalize(self, record: TaskRecord, ok: bool, error: str | None,
                   detail: str | None = None, content: str | None = None) -> None:

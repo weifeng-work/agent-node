@@ -1,12 +1,14 @@
-﻿# =====================================================================
-# agent-node 命令行壳（无 Node 版）—— start/stop/status/restart/update
-# 由 agent-node.cmd 转发调用；不依赖 npm/Node/系统 Python（用内置 venv）。
 # =====================================================================
-[CmdletBinding()]
+# agent-node 命令行壳（无 Node 版）—— start/stop/status/restart/update + 透传 cli.py
+# 由 agent-node.cmd 转发调用；不依赖 npm/Node/系统 Python（用内置 venv）。
+# 任何未知命令自动透传 tools/cli.py（default fallback）。
+# =====================================================================
 param(
     [Parameter(Position=0)]
-    [ValidateSet("start","stop","status","restart","update","mcp","help")]
-    [string]$Action = "start"
+    [string]$Action = "start",
+    # 透传 cli.py 的其余参数（未知子命令时原样交给 tools/cli.py）
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [string[]]$Remaining
 )
 $ErrorActionPreference = "Stop"
 
@@ -144,5 +146,16 @@ switch ($Action) {
     "restart" { Stop-Node; Start-Sleep -Seconds 1; Start-Node }
     "update"  { Update-Node }
     "mcp"     { Show-McpConfig }
-    default   { Write-Host "用法: agent-node start|stop|status|restart|update|mcp" }
+    "help"    { Write-Host "用法: agent-node start|stop|status|restart|update|<子命令>" }
+    default {
+        # 未知命令 → 透传 cli.py
+        $venvPy = Join-Path $ROOT "venv\Scripts\python.exe"
+        if (-not (Test-Path $venvPy)) {
+            Write-Host ("未安装或缺少 venv: " + $venvPy) -ForegroundColor Red
+            exit 1
+        }
+        $allArgs = @($Action) + @($Remaining)
+        & $venvPy "$APP\tools\cli.py" @allArgs
+        exit $LASTEXITCODE
+    }
 }

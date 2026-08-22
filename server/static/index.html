@@ -164,6 +164,7 @@ select, input[type=text], input[type=number] { width: auto; min-width: 140px; }
   <div id="status-light" class="running"></div>
   <span class="title" id="tb-name">agent-node</span>
   <span class="sub mono" id="tb-nodeid"></span>
+  <span class="badge gray" id="tb-pid" title="节点进程 PID"></span>
   <span class="badge blue" id="tb-version"></span>
   <span class="sub" id="tb-status"></span>
   <div class="spacer"></div>
@@ -577,6 +578,7 @@ async function refreshOverview() {
     light.className = ov.busy ? "busy" : "running";
     $("#tb-name").textContent = ov.name;
     $("#tb-nodeid").textContent = ov.nodeId;
+    $("#tb-pid").textContent = "PID " + (ov.pid ?? "");
     $("#tb-version").textContent = "v" + (ov.version || "?");
     $("#tb-status").textContent = `运行 ${Math.floor(ov.uptimeSec/60)} 分钟 · ` +
       (ov.busy ? "有任务处理中" : "空闲");
@@ -590,6 +592,7 @@ async function refreshOverview() {
 function renderOverview(ov) {
   $("#ov-info").innerHTML = `
     <div class="kv"><span class="k">node_id</span><span class="v mono">${esc(ov.nodeId)}</span></div>
+    <div class="kv"><span class="k">进程 PID</span><span class="v mono">${esc(ov.pid ?? "")}</span></div>
     <div class="kv"><span class="k">名称</span><span class="v">${esc(ov.name)}</span></div>
     <div class="kv"><span class="k">team</span><span class="v">${esc(ov.teamId || "（无）")}</span></div>
     <div class="kv"><span class="k">本机 IP</span><span class="v mono">${esc((ov.ips||[]).join(", "))}</span></div>

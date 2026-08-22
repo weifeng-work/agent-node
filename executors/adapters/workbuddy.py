@@ -3,7 +3,8 @@
 注入/回收核心复用 agent-bus 已实战验证的 workbuddy_executor 逻辑：
   1. deeplink 预填: os.startfile('workbuddy://task?action=start&prompt=...')
      （必须 ShellExecute 直达——过 cmd/bash 会把 URL 里的 & 截断）
-  2. UIA 提交: pywinauto 定位输入框 Edit → click_input 聚焦 → ENTER
+  2. UIA 提交: pywinauto 定位输入框 Edit → 程序化聚焦(UIA SetFocus 优先、物理点击仅兜底)
+     + 发 ENTER 前校验前台确为 WorkBuddy（防用户切窗致 ENTER 误投，见用户干扰防线）
      （含"覆盖草稿"弹窗自愈重试；提交成功 = 对话区出现含任务短码的用户消息）
   3. 回收: 主路 = 结果文件契约（提示词要求 WorkBuddy 把最终结论写入 result.md，
      is_done 判定文件存在 + 大小稳定）；兜底 = UIA 文本树轮询（完成按钮/文本稳定），
@@ -248,15 +249,19 @@ class WorkBuddyPlugin(ExecutorPlugin):
                 # 先处理「覆盖当前草稿？」模态（上次未发送内容 + 新 deeplink 触发，
                 # 模态期间 Edit 不可达——必须先点掉）
                 self._dismiss_draft_dialog(dlg)
-                try:
-                    dlg.set_focus()
-                except Exception:
-                    pass
                 edit = self._find_input_edit(dlg)
-                edit.click_input()          # 真实点击聚焦（负坐标副屏同样有效）
-                time.sleep(0.5)
-                send_keys("{ENTER}")
-                time.sleep(SUBMIT_WAIT)
+                # 主路：点击「发送」按钮提交（WorkBuddy 输入框不走 ENTER，
+                # 纸飞机按钮是唯一可靠发送途径——实测 ENTER 无效、点按钮即清空输入）
+                sent = self._click_send_button(dlg, edit)
+                if not sent:
+                    # 兜底：找不到发送按钮（布局异常/异机）时，聚焦输入框回退 ENTER
+                    self._bring_focus(dlg, edit)
+                    time.sleep(0.2)
+                    if self._foreground_is_workbuddy(dlg):
+                        send_keys("{ENTER}")
+                        sent = True
+                if sent:
+                    time.sleep(SUBMIT_WAIT)
                 # 提交成功判定（双条件）: 对话区出现含任务短码的消息 且 输入框已清空
                 # （预填后输入框本身含短码——仅看对话区会误判未提交为已提交）
                 texts_now = [n for _, n in self._walk(dlg, ("Text", "ListItem", "Button"))]
@@ -277,19 +282,114 @@ class WorkBuddyPlugin(ExecutorPlugin):
                 last_err = str(e)
         raise RuntimeError(f"deeplink 预填/ENTER 提交失败: {last_err}")
 
+    def _find_send_button(self, dlg, edit):
+        """定位输入的「发送」按钮：空名、紧贴输入框右缘(right 差≤12px)、
+        纵向落在输入区带内(er.top-20..er.bottom+90)、尺寸>0 的按钮，取最右一个。
+        实测 WorkBuddy 发送走该纸飞机按钮（ENTER 不触发），找不到返回 None。"""
+        try:
+            er = edit.rectangle()
+        except Exception:
+            return None
+        best, best_x = None, -1
+
+        def rec(ctrl, depth):
+            nonlocal best, best_x
+            if depth > 14:
+                return
+            try:
+                ct = ctrl.element_info.control_type
+                nm = ctrl.element_info.name or ""
+            except Exception:
+                ct = None
+                nm = None
+            if ct == "Button" and (nm or "").strip() == "":
+                try:
+                    r = ctrl.rectangle()
+                except Exception:
+                    r = None
+                if r and r.width() > 0 and r.height() > 0 and abs(r.right - er.right) <= 12:
+                    ymid = (r.top + r.bottom) // 2
+                    if er.top - 20 <= ymid <= er.bottom + 90 and r.left > best_x:
+                        best, best_x = ctrl, r.left
+            try:
+                for ch in ctrl.children():
+                    rec(ch, depth + 1)
+            except Exception:
+                pass
+
+        rec(dlg, 0)
+        return best
+
+    def _click_send_button(self, dlg, edit) -> bool:
+        """点击「发送」按钮。先把窗口拉前台防误点到别的应用，再物理点击。
+        返回 True=已触发点击（成功与否由提交判定兜底重试）。"""
+        btn = self._find_send_button(dlg, edit)
+        if btn is None:
+            return False
+        try:
+            dlg.set_focus()
+        except Exception:
+            pass
+        try:
+            btn.click_input()          # 实测可靠（invoke 对 Electron 无操作，故物理点击）
+            return True
+        except Exception:
+            return False
+
     def _dismiss_draft_dialog(self, dlg) -> None:
         """点掉「覆盖当前草稿？」模态（覆盖=用新任务继续）。"""
         try:
             for _, n in self._walk(dlg, ("Button",)):
                 if n and ("覆盖" in n or n == "确定"):
                     try:
-                        dlg.child_window(title=n, control_type="Button").click_input()
+                        btn = dlg.child_window(title=n, control_type="Button")
+                        try:
+                            btn.invoke()          # UIA 调用，不动鼠标
+                        except Exception:
+                            btn.click_input()     # 兜底物理点击（模态前台内，短暂）
                         time.sleep(1.5)
                     except Exception:
                         pass
                     return
         except Exception:
             pass
+
+    # ---------- 用户干扰防线（焦点校验 + 去鼠标聚焦） ----------
+
+    def _foreground_is_workbuddy(self, dlg) -> bool:
+        """前台顶层窗口是否即为 WorkBuddy 主窗口（发 ENTER 前必检，防投给错误窗口）。
+        用 ctypes 直取 user32.GetForegroundWindow，不依赖 pywinauto 内部 API 版本差异。"""
+        try:
+            import ctypes
+            fg = ctypes.windll.user32.GetForegroundWindow()
+            return bool(fg) and fg == int(dlg.handle)
+        except Exception:
+            return True  # 拿不到前台句柄时不强行拦截，避免误拦正常发送
+
+    def _has_keyboard_focus(self, edit) -> bool:
+        """查询指定控件是否持有真实 OS 键盘焦点（Electron 输入框判焦用）。"""
+        try:
+            return bool(edit.has_keyboard_focus())
+        except Exception:
+            return False
+
+    def _bring_focus(self, dlg, edit) -> None:
+        """把真实 OS 键盘焦点放进输入框：UIA set_focus 只是辅助；
+        Electron 的 contenteditable 不吃 UIA 键盘注入，物理点击是唯一能落位 caret
+        的可靠途径——因此不能用"窗口已在前台"短路跳过点击（否则 ENTER 发不出去）。"""
+        # ① UIA 辅助聚焦（尽力而为，不动用户光标）
+        try:
+            dlg.set_focus()
+            edit.set_focus()
+        except Exception:
+            pass
+        # ② 校验真实键盘焦点，不在则物理点击落 caret（Electron 必需）
+        if not self._has_keyboard_focus(edit):
+            try:
+                edit.click_input()
+            except Exception:
+                pass
+            time.sleep(0.2)
 
     # ---------- UIA 兜底回收（复用 agent-bus 轮询逻辑） ----------
     def _harvest_loop(self, task: TaskInput):

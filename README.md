@@ -49,11 +49,14 @@ python -m node.main --data-dir data
 | 命令 | 说明 |
 |---|---|
 | `agent-node` | 启动节点（已运行则打开面板） |
+| `agent-node start` | 启动节点 |
 | `agent-node stop` | 停止节点 |
 | `agent-node status` | 查看状态 |
-| `agent-node setup` | 安装或修复 |
-| `agent-node uninstall` | 完整卸载（含数据目录） |
+| `agent-node restart` | 重启节点（保持驻留） |
+| `agent-node update` | 更新节点代码与依赖 |
 | `agent-node help` | 帮助 |
+| `agent-node --help` | cli.py 完整子命令列表 |
+| `agent-node <子命令>` | 调用 AI 能力（info/list/executors/task/...） |
 
 > **被 AP 隔离时自动自愈**：默认互不发现的节点，自动做「出站扫描」——凡连上的节点即
 > 自动建立常驻连接（出站流量不被隔离规则拦截）。扫描优先拨**固定通告端口（每 IP 1 端口，
@@ -68,52 +71,28 @@ python -m node.main --data-dir data
 
 ## 让 AI 使用本节点
 
-两种接入方式能力等价：
+统一通过 `agent-node` 全局命令接入。AI 能执行 shell 命令即可使用全部能力。
 
-### 方式 A：MCP（推荐）
+### 方式 A：MCP（已废弃，不再推荐）
 
-把以下 JSON 加入你的 AI 客户端（如 Claude Desktop）配置：
+> MCP 接入方式已废弃，不再维护。保留 mcp/server.py 源码但不更新。
+> 请使用方式 B（CLI 命令）替代，功能完全等价且无需客户端配置。
 
-```json
-{
-  "mcpServers": {
-    "agent-node": {
-      "command": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/venv/Scripts/python.exe",
-      "args": ["-m", "mcp.server"],
-      "cwd": "C:/Users/YOUR_USERNAME/AppData/Local/agent-node/app",
-      "env": {
-        "AGENT_NODE_PANEL": "http://127.0.0.1:5177"
-      }
-    }
-  }
-}
-```
-
-> `AGENT_NODE_PANEL` 的 `5177` 是**默认**面板端口；若被占用节点会自动改用 5178…，
-> 实际地址以 `agent-node status` 或启动日志显示为准。
-
-caller_id（异步回执专属邮箱的身份键）**由系统自动派生**：MCP server 启动时读取父进程
-可执行名（如 workbuddy/trae），无需配置，同一台电脑上不同客户端互不冲突。内置 30+ 工具。
-
-### 方式 B：CLI
+### 方式 B：CLI（唯一接入方式，推荐）
 
 ```bash
-python -m tools.cli register        # 生成身份
-python -m tools.cli list            # 列出节点与执行器
-python -m tools.cli task --target <node_id> --executor workbuddy --prompt "要 WorkBuddy 做的任务"
-python -m tools.cli push-dir --root <目录> --to <node_id> --target inbox/migrated   # 整目录树推送（免打包）
+agent-node register                    # 首次注册身份（只需一次）
+agent-node list                        # 列出在线节点
+agent-node info                        # 本机节点概览
+agent-node task --target <node_id> --executor workbuddy --prompt "要 WorkBuddy 做的任务"
+agent-node mailbox                     # 取异步回执
+agent-node --help                      # 完整子命令列表
 ```
 
-### 让任何 AI 自动驾驶本节点
+### 让任何 AI 驾驶本节点
 
-把下面这句话发给任意智能体，它会读取节点内置说明书后指导你（以下两种说法覆盖不同
-接入方式，发给智能体时按它的能力选一种）：
+把下面这段话发给智能体，它会自取说明书、自安装、自动使用：
 
-- **MCP 接入的智能体**（连了这个节点的 MCP，能调 `get_skill` 工具）：
-> 请用工具的 `get_skill`（可带参数 doc=）读取节点内置说明书 skill/SKILL.md，
-> 学会使用 agent-node 节点后，告诉我：本机有哪些可用执行器？怎么调用远程智能体？
-
-- **无 MCP、只有命令行的智能体**（用 Bash/终端，没有 get_skill 工具）：
 > 请先读取 agent-node 节点的 skill 说明书后告诉我：本机有哪些可用执行器？怎么调用远程智能体？
 > 说明书获取方式（任选）：
 > · 在线直接读：https://raw.githubusercontent.com/weifeng-work/agent-node/main/skill/SKILL.md
@@ -136,7 +115,7 @@ python -m tools.cli push-dir --root <目录> --to <node_id> --target inbox/migra
 │ 节点核心 NodeCore（UDP beacon + TCP mesh）   │
 │ 执行器注册表（CodeBuddy/WorkBuddy/...插件）  │
 │ 文件控制 · 聊天 · shell · Syncthing 托管     │
-│ Web 面板（FastAPI）+ MCP Server + CLI        │
+│ Web 面板（FastAPI）+ CLI（agent-node 全局命令）   │
 └──────────────────────────────────────────────┘
 ```
 

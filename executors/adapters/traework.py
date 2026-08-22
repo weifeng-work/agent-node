@@ -6,8 +6,8 @@
         → 点发送按钮 button.chat-input-v2-send-button（回退 ENTER）→
         轮询到对话区出现含任务短码的 .user-message（防误判未提交）
   回收: 结果文件契约为主路（.tmp→rename 原子写，is_done=大小稳定）；
-        DOM 观察为兜底（.turn__agent-message 实质回复连续稳定且无运行指示，
-        或回复含"任务完成 <短码>"）。
+        DOM 观察为兜底（.turn__agent-message 的 .markdown-renderer 正文连续稳定且无运行指示，
+        或正文含"任务完成 <短码>"；正文只取渲染区，排除"推荐的下一个提示词"等 UI 元素）。
 
 前提（能力自检 + 前提披露，2.2.13）:
   - TraeWork CN 已安装、已登录、正在运行（执行器不冷启动 GUI，2.2.12）
@@ -52,14 +52,29 @@ PREMISES = [
     "目标机需 pip install websockets",
 ]
 
-# DOM innerText 里的界面噪音行（agent 消息头部/工具摘要）
+# DOM innerText 里的界面噪音行（agent 消息头部/工具摘要/完成页脚）
 _CHROME_RE = re.compile(
-    r"^(TraeWork|耗时.*|思考过程|正在.*|已执行\s*\d+.*|已创建.*|已修改.*|已发送.*|等待.*)$"
+    r"^(TraeWork|耗时.*|思考过程|正在.*|已执行\s*\d+.*|已创建.*|已修改.*|已发送.*|等待.*|由 AI 生成.*)$"
 )
 # 状态条文案 → 运行中（阻止"稳定即完成"判定）
 _RUNNING_RE = re.compile(r"思考|生成|执行|搜索|读取|写入|分析|恢复|规划|调用|浏览|整理|正在")
 # 状态条/图标 → 已停止或失败（且无正文时提前标记完成）
 _STOPPED_RE = re.compile(r"手动停止|已停止|停止生成|失败|出错|中断|报错")
+
+
+def _has_generating_indicator(indicators) -> bool:
+    """indicators 含 generating/loading 类名 → 仍在流式生成。
+    注意：'thinking' 类在生成结束后常驻 DOM（思考块保留），不能作为运行信号。"""
+    return any(re.search(r"generating|loading", str(c), re.I)
+               for c in (indicators or []))
+
+
+def _send_in_stop_state(send_cls: str, send_aria: str) -> bool:
+    """发送按钮处于'停止生成'态 → 仍在生成（生成结束后按钮复原为发送）。"""
+    if "停止生成" in (send_aria or ""):
+        return True
+    cls = (send_cls or "").lower()
+    return "stop" in cls and "send" not in cls
 
 
 def _clean_reply(text: str) -> str:
@@ -259,9 +274,13 @@ class TraeWorkPlugin(ExecutorPlugin):
     def _build_prompt(self, task: TaskInput, task_tag: str, result_path: str) -> str:
         prompt = (f"【跨智能体任务 {task_tag}】\n"
                   f"{task.prompt}\n\n"
-                  f"【输出要求】任务完成后，请把最终结论（Markdown 格式）写入文件：\n"
-                  f"{result_path}\n"
-                  f"（UTF-8 编码；写入成功后在回复末尾写上\"任务完成 {task_tag}\"。）")
+                  f"【输出约定（默认）】如任务正文未另行说明：\n"
+                  f"1. 任务完成后，若环境允许，请把最终结论（Markdown）写入：\n"
+                  f"   {result_path}\n"
+                  f"   （UTF-8 编码）\n"
+                  f"2. 若无法写入、或任务正文明确要求不写文件，直接在回复中给出结论即可；\n"
+                  f"3. 回复末尾可标注\"任务完成 {task_tag}\"以加快回执（非强制）。\n"
+                  f"正文指令与本约定冲突时，以正文为准。")
         if task.attachments:
             prompt += "\n【附件】" + "; ".join(str(a) for a in task.attachments)
         return prompt
@@ -343,7 +362,7 @@ class TraeWorkPlugin(ExecutorPlugin):
         """))
 
     # ---------- DOM 兜底回收 ----------
-    def _poll_state(self, task_tag: str) -> dict:
+    def _poll_dom_state(self, task_tag: str) -> dict:
         raw = self.cdp.evaluate(f"""
             (() => {{
                 const TAG = {json.dumps(task_tag)};
@@ -357,11 +376,15 @@ class TraeWorkPlugin(ExecutorPlugin):
                 const replies = [];
                 if (anchor >= 0) {{
                     for (let i = anchor + 1; i < nodes.length; i++) {{
-                        if (nodes[i].classList.contains('turn__agent-message'))
-                            replies.push(nodes[i].innerText || '');
+                        if (nodes[i].classList.contains('turn__agent-message')) {{
+                            // 只取正文渲染区，排除"推荐的下一个提示词"(container-* 哈希类)等 UI 元素
+                            const md = nodes[i].querySelector('.markdown-renderer');
+                            replies.push(md ? (md.innerText || '') : (nodes[i].innerText || ''));
+                        }}
                     }}
                 }}
                 const send = document.querySelector({json.dumps(SEND_BTN_SEL)});
+                const send_aria = send ? (send.getAttribute('aria-label') || '') : '';
                 let bar_text = '', icon_cls = '';
                 const turns = Array.from(document.querySelectorAll({json.dumps(AGENT_MSG_SEL)}));
                 if (turns.length) {{
@@ -370,12 +393,10 @@ class TraeWorkPlugin(ExecutorPlugin):
                     const icon = turns[turns.length-1].querySelector('[class*="status-icon"]');
                     if (icon) icon_cls = String(icon.className);
                 }}
-                const indicators = Array.from(document.querySelectorAll(
-                    '[class*="stop" i],[class*="generating" i],[class*="thinking" i],'
-                    '[class*="loading" i]'
-                )).slice(0, 6).map(e => String(e.className).slice(0, 80));
+                const indicators = Array.from(document.querySelectorAll('[class*="stop" i],[class*="generating" i],[class*="thinking" i],[class*="loading" i]')).slice(0, 6).map(e => String(e.className).slice(0, 80));
                 return {{anchor: anchor >= 0, replies: replies,
                          send_cls: send ? String(send.className) : '',
+                         send_aria: send_aria,
                          bar_text: bar_text, icon_cls: icon_cls, indicators: indicators}};
             }})()
         """)
@@ -408,14 +429,19 @@ class TraeWorkPlugin(ExecutorPlugin):
             # B) DOM 观察（兜底）
             with self._ops_lock:
                 try:
-                    st = self._poll_state(task_tag)
+                    st = self._poll_dom_state(task_tag)
                 except Exception:
                     continue
             if not st.get("anchor"):
                 continue
             replies = _clean_reply("\n".join(st.get("replies") or []))
             done_marker = f"任务完成 {task_tag}" in replies
-            running = bool(_RUNNING_RE.search(st.get("bar_text") or ""))
+            bar = st.get("bar_text") or ""
+            # 完成态文案（"由 AI 生成"、"耗时 Xs"）不算运行中——"生成"二字会误命中 _RUNNING_RE
+            bar_done = bool(re.match(r"^由 AI 生成", bar)) or bool(re.match(r"^耗时", bar))
+            running = (((not bar_done) and bool(_RUNNING_RE.search(bar)))
+                       or _has_generating_indicator(st.get("indicators") or [])
+                       or _send_in_stop_state(st.get("send_cls") or "", st.get("send_aria") or ""))
             stopped = bool(_STOPPED_RE.search(st.get("bar_text") or "")) or \
                       bool(_STOPPED_RE.search(st.get("icon_cls") or ""))
             if replies:
@@ -424,14 +450,16 @@ class TraeWorkPlugin(ExecutorPlugin):
                 else:
                     stable = 0
                 last_reply = replies
-                if done_marker or (len(replies) > 20 and stable >= 2 and not running):
+                if done_marker or (stable >= 2 and not running):
                     with self._state_lock:
                         self._poll_state[task.task_id] = {"done": True, "text": replies}
                     return
             elif stopped:
-                # 已停止且无正文 → 提前标记完成（get_result 兜底给提示）
+                # 已停止且无正文 → 提前标记完成（带回执提示，避免 get_result 报 agent_error）
                 with self._state_lock:
-                    self._poll_state[task.task_id] = {"done": True, "text": ""}
+                    self._poll_state[task.task_id] = {
+                        "done": True,
+                        "text": f"[TraeWork 已停止/未产出正文] 任务 {task_tag}（可能手动停止或异常）"}
                 return
         # 超时：保留已观察文本（get_result 兜底可用）
         with self._state_lock:

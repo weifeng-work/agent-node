@@ -24,3 +24,6 @@ data/
 
 # 旧分发残留目录（不再使用，忽略以防误跟踪）
 npm-dist/
+
+# 本地工具/项目记忆（WorkBuddy 等），不回传公共仓库
+.workbuddy/
