@@ -61,8 +61,9 @@ func readPanelURL(r string) string {
 
 // healthEndpoint P1-2：从 launch.json 取健康判定路径后缀（默认 /api/overview）。
 // base 仍由 C3 panel.url 提供，杜绝第二个端口/URL 事实源；只外置路径后缀。
+// P2-1：launch.json 不可用（缺失/损坏/min_launcher 阻断）时统一回缺省，不与 spawn 语义分裂。
 func healthEndpoint(r string) string {
-	if j, err := loadLaunchJSON(r); err == nil && j.Health.Endpoint != "" {
+	if j, err := loadUsableLaunch(r); err == nil && j.Health.Endpoint != "" {
 		return j.Health.Endpoint
 	}
 	return "/api/overview"
@@ -108,10 +109,11 @@ func probeOverview(panelURL, endpoint string) (*overview, error) {
 	if err := json.Unmarshal(body, &ov); err != nil {
 		return nil, err
 	}
-	// P1-2：结构校验——若 health.endpoint 被改成非 overview（如 /api/health），
-	// 缺少 NodeId 时视为探测失败，避免 tooltip 的 version/pid/panelURL 静默为空。
-	if strings.TrimSpace(ov.NodeId) == "" {
-		return nil, fmt.Errorf("endpoint %s is not /api/overview (missing NodeId)", endpoint)
+	// P1-2：以 overview 独有的 pid 字段做结构校验——nodeId 不足以区分（/api/health 也返回
+	// nodeId），改用 pid（仅 /api/overview 返回）。若 health.endpoint 被改成非 overview（如
+	// /api/health，无 pid），视为探测失败，避免 tooltip 的 version/pid/panelURL 静默为空。
+	if ov.Pid <= 0 {
+		return nil, fmt.Errorf("endpoint %s is not /api/overview (missing pid)", endpoint)
 	}
 	return &ov, nil
 }

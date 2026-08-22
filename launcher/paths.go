@@ -161,8 +161,9 @@ func installedRoot(r string) (bool, string) {
 
 	var missing []string
 
-	if j, err := loadLaunchJSON(r); err == nil && len(j.InstallCheck) > 0 {
-		// P2-2：len>0 才采用外置清单——JSON [] 会解出非 nil 空切片，若跳过会漏掉全部完整性检查
+	if j, err := loadUsableLaunch(r); err == nil && len(j.InstallCheck) > 0 {
+		// P2-2：len>0 才采用外置清单；P2-1：loadUsableLaunch 使 min_launcher 阻断时
+		// 该文件整体不可用，回退内置布局检查，避免"install_check 读过新文件"语义分裂。
 		for _, p := range j.InstallCheck {
 			abs := expandLaunch(p, root, data, venv)
 			if !isDir(abs) && !fileExists(abs) {

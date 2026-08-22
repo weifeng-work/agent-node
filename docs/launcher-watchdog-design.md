@@ -160,8 +160,9 @@ C1 = {
 }
 ```
 
-- **路径模板**：`{ROOT}`/`{DATA}`/`{VENV}` 在 exe 侧展开（每用户 `%LOCALAPPDATA%` 不同，多账户可移植）。
+- **路径模板**：`{ROOT}`/`{DATA}`/`{VENV}` 在 exe 侧展开（每用户 `%LOCALAPPDATA%` 不同，多账户可移植）。示例中非 spawn.exe 的路径均写模板；**`spawn.exe` 例外**——Install 优先写解析后的绝对路径（base home pythonw 可能在 ROOT 外，无法模板化），install_check 的第一条 exe 项同步追踪该实际 spawn.exe（**P2-2：不恒固定 `venv\Scripts\pythonw.exe`**，否则 home pythonw 场景下 venv 转发器缺失会误判组件缺失拒绝拉起）。
 - **回退链（关键，严禁破坏）**：`launch.json` → `launch.json.bak` → 内置 `buildLaunchInbuilt`（paths.go）。JSON 缺失/损坏/schema 超界/min_launcher 高于本 exe → 一律回退内置；**绝不自动删除 launch.json**（损坏防护）。
+- **min_launcher 阻断语义（P2-1）**：min_launcher 高于本 exe 时，`spawn`、`health.endpoint`、`ready_timeout_ms`、`install_check` **四者整体视为文件不可用**，统一走内置/缺省（不出现"spawn 用内置、健康/就绪/完整性仍读过新文件"的分裂）。实现：`loadUsableLaunch` 在 min_launcher 阻断时返回 err，各消费方（resolveLaunchSpec / healthEndpoint / launchReadyTimeoutMS / installedRoot）据此回退。
 - **语义约束**：
   - `spawn.exe/cwd` 必填（trim 后非空）；exe 解析后需真实存在。
   - `health.endpoint` 仅允许路径后缀（`/` 开头）；空则默认 `/api/overview`；裸 host / 完整 URL / 含空白一律拒绝——**base 单一来源仍是 `panel.url`**，杜绝"第二端口源"。

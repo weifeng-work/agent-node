@@ -140,6 +140,21 @@ func tryReadLaunch(p string) (*launchJSON, error) {
 	return j, nil
 }
 
+// loadUsableLaunch 综合判断 launch.json 对当前 exe 是否可用：可读 + 校验通过 + min_launcher
+// 不高于本 exe 才返回非 nil。min_launcher 阻断（能力级变更需换 exe）时整文件视为不可用，
+// 返回 err —— 供 healthEndpoint/launchReadyTimeoutMS/installedRoot 统一回退缺省（P2-1，避免
+// "spawn 用内置、健康/就绪/完整性仍读过新文件" 的语义分裂）。调用方自行回退内置逻辑即可。
+func loadUsableLaunch(r string) (*launchJSON, error) {
+	j, err := loadLaunchJSON(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkMinLauncher(j.MinLauncher); err != nil {
+		return nil, errLaunchBad
+	}
+	return j, nil
+}
+
 // buildLaunchFromJSON 把 launch.json 的 spawn 段组装成 LaunchSpec（C1 数据化）。
 // 模板变量先替换，env 与既有环境合并（保留已有值，额外 env 前置）。
 func buildLaunchFromJSON(j *launchJSON, r, dataDir string) (LaunchSpec, error) {
@@ -250,9 +265,10 @@ func versionInts(v string) [3]int {
 	return out
 }
 
-// launchReadyTimeoutMS 返回就绪超时毫秒：launch.json 有则用，缺省 40000（M-4 与 booting 判定联动）。
+// launchReadyTimeoutMS 返回就绪超时毫秒：launch.json 可用（含 min_launcher 未阻断）时取之，
+// 否则缺省 40000（M-4 与 booting 判定联动；P2-1 整文件不可用统一缺省）。
 func launchReadyTimeoutMS(r string) int {
-	j, err := loadLaunchJSON(r)
+	j, err := loadUsableLaunch(r)
 	if err != nil || j.ReadyTimeoutMS <= 0 {
 		return 40000
 	}

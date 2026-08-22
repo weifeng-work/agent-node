@@ -152,17 +152,21 @@ function Write-LaunchJson {
     $launch = @{
         schema_version = 1
         min_launcher   = "0.0.0"
-        install_check  = @(
-            (Join-Path $Root "app"),
-            (Join-Path $Root "venv"),
-            (Join-Path $Root "data"),
-            (Join-Path $Venv "Scripts\pythonw.exe")
+        # 路径模板化（{ROOT}/{DATA}/{VENV}）由 exe 侧按对应用户展开（多账户可移植，与 §5.1 文档一致）。
+        # 例外的 spawn.exe：优先的 base home pythonw 可能在 ROOT 外，无法模板化，故写解析后的绝对路径（P1-1）。
+        # install_check 的 exe 项只需追踪实际 spawn.exe（P2-2：不用恒固定 venv\Scripts\pythonw.exe，
+        # 否则 home pythonw 场景下 venv\Scripts\pythonw.exe 缺失会误判"组件缺失"拒绝拉起）。
+        install_check = @(
+            "{ROOT}/app",
+            "{ROOT}/venv",
+            "{ROOT}/data",
+            $spawnExe
         )
         spawn = @{
             exe  = $spawnExe
-            args = @("-m", "node.main", "--data-dir", $Data)
-            cwd  = $App
-            env  = @{ PYTHONPATH = (Join-Path $Venv "Lib\site-packages") }
+            args = @("-m", "node.main", "--data-dir", "{DATA}")
+            cwd  = "{ROOT}/app"
+            env  = @{ PYTHONPATH = "{VENV}/Lib/site-packages" }
         }
         health          = @{ endpoint = "/api/overview" }
         ready_timeout_ms = 40000
@@ -175,7 +179,8 @@ function Write-LaunchJson {
         if (Test-Path $tmp) { Remove-Item -Force $tmp }
         if (Test-Path $out) { Copy-Item -Force $out (Join-Path $Data "launch.json.bak") }
         [System.IO.File]::WriteAllText($tmp, $json, [System.Text.UTF8Encoding]::new($false))
-        Move-Item -Force $tmp $out
+        # P3-1：.NET 原子 replace（而非 Move-Item 的"删除+改名"），消除替换窗口读半文件
+        [System.IO.File]::Move($tmp, $out, $true)
         Write-Host ("  launch.json 已生成（spawn exe: " + $spawnExe + "）") -ForegroundColor Green
     } catch {
         # P2-5：写失败时清理 .tmp，绝不留半成品（回退链交给 exe 的 launch.json → .bak）
