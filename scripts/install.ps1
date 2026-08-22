@@ -38,6 +38,15 @@ $PIP_MIRRORS = @(
     "https://pypi.org/simple",
     "https://pypi.tuna.tsinghua.edu.cn/simple"
 )
+# Go 启动器 release 资产（仓库不提交二进制，见 .gitignore）：从最新 release 下载双击即用的 exe。
+# releases/latest/download 始终指向最新 tag 的资产；镜像兜底与源码同理。
+$LAUNCHER_MIRRORS = @(
+    "https://github.com/weifeng-work/agent-node/releases/latest/download/agent-node-launcher.exe",
+    "https://ghproxy.cn/https://github.com/weifeng-work/agent-node/releases/latest/download/agent-node-launcher.exe",
+    "https://ghproxy.net/https://github.com/weifeng-work/agent-node/releases/latest/download/agent-node-launcher.exe",
+    "https://ghfast.top/https://github.com/weifeng-work/agent-node/releases/latest/download/agent-node-launcher.exe",
+    "https://gh-proxy.com/https://github.com/weifeng-work/agent-node/releases/latest/download/agent-node-launcher.exe"
+)
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -158,6 +167,19 @@ try {
     # 覆盖式更新代码（app 整体替换；data 不动）
     Get-ChildItem -Path $APP -Force | ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     Get-ChildItem -Path $sub.FullName -Force | Copy-Item -Destination $APP -Recurse -Force
+
+    # launcher exe 为 Release 资产（仓库不提交二进制），从最新 release 下载到 bin，
+    # 供快捷方式/启动接管（6/8 与 8/8）使用。下载失败仅告警，回退 CLI 入口。
+    $launcher = Join-Path $APP "bin\agent-node-launcher.exe"
+    try {
+        New-Item -ItemType Directory -Force -Path (Join-Path $APP "bin") | Out-Null
+        $lu = Select-Source $LAUNCHER_MIRRORS
+        Write-Host ("  下载 launcher: " + $lu)
+        Download-File $lu $launcher
+        Write-Host "  launcher 就绪" -ForegroundColor Green
+    } catch {
+        Write-Host ("  launcher 下载失败（" + $_.Exception.Message + "），将回退命令行入口") -ForegroundColor Yellow
+    }
 
     # ---------- 3/8 venv ----------
     Step 3 "创建/更新 Python 虚拟环境并安装依赖"

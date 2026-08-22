@@ -33,9 +33,27 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: launcher/go.mod
+          cache-dependency-path: launcher/go.sum
+
       - name: Resolve tag version
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      # 构建 Go 启动器（release 资产：用户下载双击即用的单体 exe）。
+      # systray 在 windows 依赖 cgo，故用 mingw-w64 交叉编译，-H windowsgui 去控制台窗口。
+      # 仓库不再提交二进制（见 .gitignore），exe 仅在发布时构建产出。
+      - name: Build launcher exe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+          mkdir -p bin
+          cd launcher
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go build -trimpath -ldflags "-H windowsgui -s -w" -o ../bin/agent-node-launcher.exe .
 
       # 把 tag 版本写入 node/version.py（纯 Python，无 npm；同版本幂等）
       - name: Bump version.py
@@ -68,3 +86,4 @@ jobs:
           tag_name: "${{ steps.tag.outputs.tag }}"
           generate_release_notes: true
           allowUpdates: true
+          files: bin/agent-node-launcher.exe  # 用户下载双击即用的启动器（release 资产）

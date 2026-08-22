@@ -480,7 +480,7 @@ agent-node <子命令> [参数]
 | 命令 | 说明 |
 |---|---|
 | `agent-node comm-log [--peer] [--direction] [--type] [--corr] [--limit 200]` | 通信日志 |
-| `agent-node node-log [--source node\|mcp\|executor\|syncthing] [--lines 200] [--level]` | 节点运行日志 |
+| `agent-node node-log [--source node\|executor\|syncthing] [--lines 200] [--level]` | 节点运行日志 |
 
 ### 插件
 | 命令 | 说明 |
@@ -492,6 +492,7 @@ agent-node <子命令> [参数]
 | 命令 | 说明 |
 |---|---|
 | `agent-node shell --to <node_id> --cmd "command" [--timeout 60]` | 远程命令（受目标 allow_shell） |
+| `agent-node node-update --node <node_id> [--timeout 300]` | 远程更新目标节点的代码 |
 | `agent-node diag` | 一键健康自检 |
 | `agent-node register` | 生成/读取 caller_id 身份（首次） |
 

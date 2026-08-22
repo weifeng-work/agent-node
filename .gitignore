@@ -27,3 +27,6 @@ npm-dist/
 
 # 本地工具/项目记忆（WorkBuddy 等），不回传公共仓库
 .workbuddy/
+
+# Go 启动器编译产物（由 Release 时构建，不入库）
+**/agent-node-launcher.exe
