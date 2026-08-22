@@ -211,10 +211,12 @@ try {
         $desktop = [Environment]::GetFolderPath('Desktop')
         if (-not $desktop) { $desktop = Join-Path $env:USERPROFILE "Desktop" }
         $lnk = Join-Path $desktop "agent-node.lnk"
+        $exe = Join-Path $APP "bin\agent-node-launcher.exe"
+        if (-not (Test-Path $exe)) { $exe = $cmdPath }  # launcher 缺失时回退 CLI 入口（兼容旧包）
         try {
             $ws = New-Object -ComObject WScript.Shell
             $sc = $ws.CreateShortcut($lnk)
-            $sc.TargetPath = $cmdPath
+            $sc.TargetPath = $exe
             $sc.WorkingDirectory = $ROOT
             $sc.Description = "agent-node 节点：双击启动或打开面板"
             $sc.Save()
@@ -235,7 +237,22 @@ try {
     if ($SkipStart) {
         Write-Host "  已跳过自动启动（-SkipStart）；可运行 agent-node start。" -ForegroundColor Yellow
     } else {
-        & $cmdPath start
+        $exe = Join-Path $APP "bin\agent-node-launcher.exe"
+        if (Test-Path $exe) {
+            # 装完由 Go 启动器接管：自进看门狗并拉起节点（避免与 Python start 重复拉起）
+            Start-Process -FilePath $exe
+            $urlFile = Join-Path $DATA "panel.url"
+            $dl = (Get-Date).AddSeconds(40)
+            while ((Get-Date) -lt $dl) {
+                Start-Sleep -Seconds 1
+                if (Test-Path $urlFile) {
+                    $u = (Get-Content $urlFile -Raw).Trim()
+                    if ($u) { Start-Process $u; break }
+                }
+            }
+        } else {
+            & $cmdPath start
+        }
     }
 }
 finally {
