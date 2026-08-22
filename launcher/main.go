@@ -81,6 +81,8 @@ func onTrayReady(w *watchState) {
 	mStop := systray.AddMenuItem("停止节点", "停止节点（需再次启动）")
 	mRestart := systray.AddMenuItem("重启节点", "停止后重新拉起")
 	systray.AddSeparator()
+	mCheckUpdate := systray.AddMenuItem("检查更新", "检查节点是否有新版本")
+	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("退出托盘", "退出；节点保持运行（D7）")
 
 	// 图标与 tooltip 轮询刷新：只读原子快照，避免与 run 循环写侧数据竞争（P2-12）
@@ -113,6 +115,8 @@ func onTrayReady(w *watchState) {
 			w.cmds <- func() { w.cmdStop() }
 		case <-mRestart.ClickedCh:
 			w.cmds <- func() { w.cmdRestart() }
+		case <-mCheckUpdate.ClickedCh:
+			w.cmds <- func() { w.cmdCheckUpdate() }
 		case <-mQuit.ClickedCh:
 			systray.Quit()
 			return
