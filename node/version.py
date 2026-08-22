@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 
 # bump_version.py 发版时自动覆盖为 tag（去掉前缀 v）；本地源码形态则被 git describe 覆盖
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 
 
 def _git_describe() -> str | None:
