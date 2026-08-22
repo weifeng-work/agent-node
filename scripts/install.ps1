@@ -101,6 +101,28 @@ function Refresh-Path {
 function Extract-Zip([string]$zipPath, [string]$destDir) {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destDir)
 }
+# 更新覆盖前停止 app/venv 运行中的本项目进程（排除 data\ —— syncthing 只占 data 不占 app，无需停，
+# 且同步引擎停/起成本高）。复制/删除 app 时若节点仍在跑，psmux.exe / venv python 锁定的文件会导致
+# 覆盖失败（"进程正在使用文件"IOException，ErrorActionPreference=Stop 下直接终止）。
+# 用 taskkill /T /F 尽量放行；杀不掉的由后续 Copy-Item -ErrorAction SilentlyContinue 兜底。
+function Stop-RunningProcesses([string]$root) {
+    $dataPrefix = [System.IO.Path]::GetFullPath((Join-Path $root "data"))
+    $targets = Get-CimInstance Win32_Process | Where-Object {
+        $_.ExecutablePath -and
+        $_.ExecutablePath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not $_.ExecutablePath.StartsWith($dataPrefix + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    foreach ($p in $targets) {
+        # 跳过当前 powershell 进程自身（本脚本在 /T 树内会自含）；只杀本项目相关的
+        if ($p.ProcessId -eq $PID) { continue }
+        try {
+            taskkill /PID $p.ProcessId /T /F 2>$null | Out-Null
+            Write-Host ("  已停止进程: " + $p.Name + " (pid " + $p.ProcessId + ")") -ForegroundColor DarkGray
+        } catch {}
+    }
+    if (-not $targets) { Write-Host "  无运行中的 app/venv 进程" -ForegroundColor DarkGray }
+}
 # 流式下载：分块读流并输出字节/百分比进度（反之为大文件静默卡住）
 function Download-File([string]$uri, [string]$outPath) {
     $req = [System.Net.HttpWebRequest]::Create($uri)
@@ -179,8 +201,9 @@ function Write-LaunchJson {
         if (Test-Path $tmp) { Remove-Item -Force $tmp }
         if (Test-Path $out) { Copy-Item -Force $out (Join-Path $Data "launch.json.bak") }
         [System.IO.File]::WriteAllText($tmp, $json, [System.Text.UTF8Encoding]::new($false))
-        # P3-1：.NET 原子 replace（而非 Move-Item 的"删除+改名"），消除替换窗口读半文件
-        [System.IO.File]::Move($tmp, $out, $true)
+        # P3-1 回退：PS5.1/.NET Framework 无 [File]::Move(src,dst,$true) 三参重载（实测 MethodException），
+        # 改回 Move-Item；半写窗口由 exe 侧 launch.json → .bak 回退链吸收（见 launcher/launchspec.go）。
+        Move-Item -Force $tmp $out
         Write-Host ("  launch.json 已生成（spawn exe: " + $spawnExe + "）") -ForegroundColor Green
     } catch {
         # P2-5：写失败时清理 .tmp，绝不留半成品（回退链交给 exe 的 launch.json → .bak）
@@ -222,9 +245,11 @@ try {
     Extract-Zip $srcZip $srcEx
     $sub = Get-ChildItem -Path $srcEx -Directory | Select-Object -First 1
     if (-not $sub) { Abort "源码 zip 内容异常。" }
+    # 更新前停掉占用 app/venv 的节点进程，避免覆盖 app 时文件被锁导致拷贝失败
+    Stop-RunningProcesses $ROOT
     # 覆盖式更新代码（app 整体替换；data 不动）
     Get-ChildItem -Path $APP -Force | ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-    Get-ChildItem -Path $sub.FullName -Force | Copy-Item -Destination $APP -Recurse -Force
+    Get-ChildItem -Path $sub.FullName -Force | Copy-Item -Destination $APP -Recurse -Force -ErrorAction SilentlyContinue
 
     # launcher exe 为 Release 资产（仓库不提交二进制），从最新 release 下载到 bin，
     # 供快捷方式/启动接管（6/8 与 8/8）使用。下载失败仅告警，回退 CLI 入口。
