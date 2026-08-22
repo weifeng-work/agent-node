@@ -137,6 +137,40 @@ C1 = {
 6. **就绪判定**（复用 ps1 已验证模式）：spawn 后轮询 ≤40s：node.lock 存在 + panel.url 存在 + GET /api/health 200 → 绿；超时 → 红 + tooltip 指 node.log。
 7. **Go 提示**：CreateProcess 用 `CREATE_NO_WINDOW`(0x08000000)，stderr 句柄指向文件；`golang.org/x/sys/windows` 有 CreateMutexW/OpenProcess，**无 cgo**，GOOS=windows GOARCH=amd64 交叉编译。
 
+### 5.1 C1 数据化：data/launch.json（v2 外置启动清单）
+
+**动机**：C1 四元组的解析逻辑内嵌在 exe（paths.go `resolveLauncher`/`buildLaunchInbuilt`），一旦节点侧（venv 布局/pyvenv home/依赖路径）演进就需要重编启动器。v2 把 C1 的"最终产物"外置为 JSON，实现启动器与节点部署解耦（节点更新不换 exe）。
+
+- **流向**：`scripts/install.ps1` 的 `Write-LaunchJson` 生成 `data/launch.json`（哈希表 + `ConvertTo-Json` 构造，原子写 `.tmp`→`Move`，保留上一份为 `.bak`）；**exe 只消费、不生成、不下载**（单一维护点 D6）。
+- **schema**（`schema_version` 整数区间，当前 [1,1]）字段只增不改、语义稳定：
+
+```json
+{
+  "schema_version": 1,
+  "min_launcher": "0.0.0",
+  "install_check": ["{ROOT}/app", "{VENV}", "{DATA}"],
+  "spawn": {
+    "exe": "{VENV}/Scripts/pythonw.exe",
+    "args": ["-m", "node.main", "--data-dir", "{DATA}"],
+    "cwd": "{ROOT}/app",
+    "env": {"PYTHONPATH": "{VENV}/Lib/site-packages"}
+  },
+  "health": {"endpoint": "/api/overview"},
+  "ready_timeout_ms": 40000
+}
+```
+
+- **路径模板**：`{ROOT}`/`{DATA}`/`{VENV}` 在 exe 侧展开（每用户 `%LOCALAPPDATA%` 不同，多账户可移植）。
+- **回退链（关键，严禁破坏）**：`launch.json` → `launch.json.bak` → 内置 `buildLaunchInbuilt`（paths.go）。JSON 缺失/损坏/schema 超界/min_launcher 高于本 exe → 一律回退内置；**绝不自动删除 launch.json**（损坏防护）。
+- **语义约束**：
+  - `spawn.exe/cwd` 必填（trim 后非空）；exe 解析后需真实存在。
+  - `health.endpoint` 仅允许路径后缀（`/` 开头）；空则默认 `/api/overview`；裸 host / 完整 URL / 含空白一律拒绝——**base 单一来源仍是 `panel.url`**，杜绝"第二端口源"。
+  - `spawn.env` 与既有环境合并：展开并去空白后为空值则跳过（不清空既有 PYTHONPATH）；非空值前置、已有则拼接保留。
+  - `install_check` 非空时，安装完整性检查随其外置（模板化路径）；空/缺失回退内置布局检查（app/venv/data + venv\Scripts\pythonw.exe）。
+- **版本接线**：`min_launcher` 用于能力级变更时通知"exe 过旧需换"；`launcherVersion` 由构建注入（build.ps1 / GitHub Actions 均注入），二者比较不回退则用 JSON，否则回退内置。
+- **每次 spawn 现读**（不缓存到 launcher 生命周期），保证节点更新后 `launch.json` 立即生效。
+- **就绪超时**：`ready_timeout_ms` 可选，缺省 40000（与 spawn 后 booting 就绪判定联动）。
+
 ---
 
 ## 6. 重启风暴防护（看门狗核心，含 M2 语义修正）

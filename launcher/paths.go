@@ -110,9 +110,8 @@ func fileExists(p string) bool {
 	return err == nil && !os.IsNotExist(err)
 }
 
-// buildLaunchSpec 组装 C1 四元组。
-// shouldAutoSpawn 由上层依据持有/监督逻辑决定；这里仅生成规约。
-func buildLaunchSpec(r, dataDir string) (LaunchSpec, error) {
+// buildLaunchInbuilt 组装内置 C1 四元组（不含 launch.json，纯回退）。
+func buildLaunchInbuilt(r, dataDir string) (LaunchSpec, error) {
 	exe, app, sitePkg := resolveLauncher(r)
 	if !fileExists(exe) {
 		return LaunchSpec{}, os.ErrNotExist
@@ -142,10 +141,41 @@ func buildLaunchSpec(r, dataDir string) (LaunchSpec, error) {
 	return LaunchSpec{Exe: exe, Args: args, Cwd: app, Env: env}, nil
 }
 
+// buildLaunchSpec 组装 C1 四元组（v2：launch.json 优先，内置逻辑回退）。
+// 统一的公开入口；内部走 resolveLaunchSpec 回退链。
+func buildLaunchSpec(r, dataDir string) (LaunchSpec, error) {
+	spec, _, err := resolveLaunchSpec(r, dataDir)
+	return spec, err
+}
+
 // installedRoot 检查 %LOCALAPPDATA%\agent-node 是否"已装且完整"。
 // 返回: ok(完整性), 缺失部分描述
+//
+// v2（WorkBuddy P1-1）：完整性检查布局随 launch.json 外置——install_ps1 可在 launch.json
+// 的 install_check 里声明需存在的路径清单（{ROOT}/{DATA}/{VENV} 模板化）；exe 无 launch.json
+// 时回退内置布局检查。
 func installedRoot(r string) (bool, string) {
-	missing := []string{}
+	root := filepath.Clean(r)
+	data := filepath.Join(root, "data")
+	venv := filepath.Join(root, "venv")
+
+	var missing []string
+
+	if j, err := loadLaunchJSON(r); err == nil && len(j.InstallCheck) > 0 {
+		// P2-2：len>0 才采用外置清单——JSON [] 会解出非 nil 空切片，若跳过会漏掉全部完整性检查
+		for _, p := range j.InstallCheck {
+			abs := expandLaunch(p, root, data, venv)
+			if !isDir(abs) && !fileExists(abs) {
+				missing = append(missing, abs)
+			}
+		}
+		if len(missing) > 0 {
+			return false, strings.Join(missing, ", ")
+		}
+		return true, ""
+	}
+
+	// 内置布局回退（无 launch.json）
 	for _, d := range []string{filepath.Join(r, "app"), filepath.Join(r, "venv"), filepath.Join(r, "data")} {
 		if !isDir(d) {
 			missing = append(missing, d)

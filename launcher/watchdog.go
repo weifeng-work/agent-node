@@ -15,13 +15,13 @@ import (
 // stateSnapshot 供托盘线程只读的健康快照（消除与 run 循环写侧的数据竞争，P2-12）。
 type stateSnapshot struct {
 	holding    bool
-	alive      bool        // node.lock PID 存活
-	healthy    bool        // + /api/overview 200（全栈活，P1-1）
-	tripped    bool        // 熔断已断开
-	paused     bool        // 已显式停止
-	incomplete string      // 组件缺失描述（非空=已装但不完整）
-	booting    bool        // 已 spawn、进程活但面板未就绪
-	reason     string      // 人读 tooltip 原因
+	alive      bool   // node.lock PID 存活
+	healthy    bool   // + /api/overview 200（全栈活，P1-1）
+	tripped    bool   // 熔断已断开
+	paused     bool   // 已显式停止
+	incomplete string // 组件缺失描述（非空=已装但不完整）
+	booting    bool   // 已 spawn、进程活但面板未就绪
+	reason     string // 人读 tooltip 原因
 	version    string
 	pid        int
 	panelURL   string
@@ -34,8 +34,8 @@ type watchState struct {
 
 	child      *exec.Cmd // 持有的子进程（holding 时有值）
 	childPID   int
-	holding    bool  // true=以父进程持有；false=并行监督
-	paused     bool  // true=显式停止后不再自动拉起（等下一行 Start/Restart）
+	holding    bool // true=以父进程持有；false=并行监督
+	paused     bool // true=显式停止后不再自动拉起（等下一行 Start/Restart）
 	incomplete string
 	childDone  chan int
 	cmds       chan func()
@@ -105,7 +105,7 @@ func (w *watchState) probeOnce() *overview {
 		w.lastOv = nil
 		return nil
 	}
-	ov, err := probeOverview(u)
+	ov, err := probeOverview(u, healthEndpoint(w.r))
 	if err != nil {
 		w.lastOv = nil
 		return nil
@@ -131,7 +131,7 @@ func (w *watchState) evaluateHealth() {
 	}
 	// 就绪判定（P1-1）：spawn 后进程活但面板未就绪，窗口内视为"启动中"
 	s.booting = w.holding && s.alive && !s.healthy &&
-		!w.childSpawn.IsZero() && time.Since(w.childSpawn) < 40*time.Second
+		!w.childSpawn.IsZero() && time.Since(w.childSpawn) < time.Duration(launchReadyTimeoutMS(w.r))*time.Millisecond
 
 	switch {
 	case w.incomplete != "":
@@ -430,7 +430,12 @@ func (w *watchState) reconcile() {
 		return
 	}
 	logL(w.r, "no live node; respawning (reconcile)")
-	_ = w.spawnHeld()
+	// P2-6：spawn 失败不吞错——记日志并对下次拉起做指数退避，避免每 3s 空转轰炸
+	if err := w.spawnHeld(); err != nil {
+		w.consecFail++
+		w.nextSpawn = time.Now().Add(time.Duration(crashDelay(w.consecFail)) * time.Second)
+		logL(w.r, "spawn failed: %v (retry in %s)", err, time.Until(w.nextSpawn))
+	}
 }
 
 // ---- 命令（来自托盘） ----

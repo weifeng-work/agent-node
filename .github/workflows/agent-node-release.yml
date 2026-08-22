@@ -52,8 +52,10 @@ jobs:
           sudo apt-get install -y gcc-mingw-w64-x86-64
           mkdir -p bin
           cd launcher
+          LVER="${GITHUB_REF#refs/tags/v}"   # 去前导 v，注入 main.launcherVersion（checkMinLauncher 用）
           CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
-            go build -trimpath -ldflags "-H windowsgui -s -w" -o ../bin/agent-node-launcher.exe .
+            go build -trimpath -ldflags "-H windowsgui -s -w -X main.launcherVersion=$LVER" \
+            -o ../bin/agent-node-launcher.exe .
 
       # 把 tag 版本写入 node/version.py（纯 Python，无 npm；同版本幂等）
       - name: Bump version.py

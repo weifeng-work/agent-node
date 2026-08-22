@@ -15,6 +15,7 @@ agent-node 是局域网多机智能体协作节点。每台电脑跑一个节点
 > **安装**（Windows）：PowerShell 一行
 > `irm https://raw.githubusercontent.com/weifeng-work/agent-node/main/scripts/install.ps1 | iex`
 > ——自动下源码 + venv 装依赖 + 建桌面快捷方式 + 启动节点。
+> 安装会生成 `data/launch.json`（启动器的外部启动清单，与内置回退链对齐）——由 install 维护，AI 不得手改。
 > 日常控制用 `agent-node start|stop|status|restart|update`，
 > AI 能力调用用 `agent-node <子命令>`。
 

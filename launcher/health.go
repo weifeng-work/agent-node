@@ -14,7 +14,7 @@ import (
 
 // ---- C4 node.lock：读取 PID 并判存活 ----
 
-func lockPath(r string) string   { return filepath.Join(r, "data", "node.lock") }
+func lockPath(r string) string     { return filepath.Join(r, "data", "node.lock") }
 func panelURLPath(r string) string { return filepath.Join(r, "data", "panel.url") }
 
 // readLockPID 读 node.lock，返回 PID 与解析状态。file 不存在 -> ok=false。
@@ -59,13 +59,22 @@ func readPanelURL(r string) string {
 	return strings.TrimSpace(string(b))
 }
 
+// healthEndpoint P1-2：从 launch.json 取健康判定路径后缀（默认 /api/overview）。
+// base 仍由 C3 panel.url 提供，杜绝第二个端口/URL 事实源；只外置路径后缀。
+func healthEndpoint(r string) string {
+	if j, err := loadLaunchJSON(r); err == nil && j.Health.Endpoint != "" {
+		return j.Health.Endpoint
+	}
+	return "/api/overview"
+}
+
 // livePanelURL M6/P2-7: 优先返回探测到的真实可用面板 URL（overview.PanelUrl），失败回退 panel.url。
 func livePanelURL(r string) string {
 	u := readPanelURL(r)
 	if u == "" {
 		return ""
 	}
-	if ov, err := probeOverview(u); err == nil && ov.PanelUrl != "" {
+	if ov, err := probeOverview(u, healthEndpoint(r)); err == nil && ov.PanelUrl != "" {
 		return ov.PanelUrl
 	}
 	return u
@@ -82,10 +91,10 @@ type overview struct {
 	Uptime   int64  `json:"uptimeSec"`
 }
 
-// probeOverview 探测 panelUrl 的 /api/overview；成功返回解析结果与面板URL。
-func probeOverview(panelURL string) (*overview, error) {
+// probeOverview 探测 panelURL 的 health endpoint（来自 launch.json，默认 /api/overview）。
+func probeOverview(panelURL, endpoint string) (*overview, error) {
 	client := &http.Client{Timeout: 2 * time.Second}
-	base := strings.TrimSuffix(panelURL, "/") + "/api/overview"
+	base := strings.TrimSuffix(panelURL, "/") + endpoint
 	resp, err := client.Get(base)
 	if err != nil {
 		return nil, err
@@ -98,6 +107,11 @@ func probeOverview(panelURL string) (*overview, error) {
 	var ov overview
 	if err := json.Unmarshal(body, &ov); err != nil {
 		return nil, err
+	}
+	// P1-2：结构校验——若 health.endpoint 被改成非 overview（如 /api/health），
+	// 缺少 NodeId 时视为探测失败，避免 tooltip 的 version/pid/panelURL 静默为空。
+	if strings.TrimSpace(ov.NodeId) == "" {
+		return nil, fmt.Errorf("endpoint %s is not /api/overview (missing NodeId)", endpoint)
 	}
 	return &ov, nil
 }

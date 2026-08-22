@@ -132,6 +132,59 @@ function Download-File([string]$uri, [string]$outPath) {
     }
 }
 
+# 生成 data/launch.json（v2：C1 四元组数据化外部启动清单）。
+# 由 install.ps1 生成、exe 只消费；先写 .tmp 再原子改名，并保留上一份为 .bak
+# 作损坏回退（P0-2/P1-1，与 launcher/launchspec.go 的 loadLaunchJSON 回退链对齐）。
+# 用哈希表 + ConvertTo-Json 构造（避免文本模板替换时的反斜杠转义陷阱）。
+function Write-LaunchJson {
+    param([string]$Root, [string]$App, [string]$Venv, [string]$Data)
+    # 与内置 C1 一致：优先 pyvenv.cfg home 的 base pythonw（避免 venv 转发器双进程），否则 venv\Scripts\pythonw.exe
+    $spawnExe = Join-Path $Venv "Scripts\pythonw.exe"
+    $cfg = Join-Path $Venv "pyvenv.cfg"
+    if (Test-Path $cfg) {
+        $homeVal = (Get-Content $cfg | Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1)
+        if ($homeVal) {
+            $homePath = ($homeVal -split '=', 2)[1].Trim()
+            $cand = Join-Path $homePath "pythonw.exe"
+            if (Test-Path $cand) { $spawnExe = $cand }
+        }
+    }
+    $launch = @{
+        schema_version = 1
+        min_launcher   = "0.0.0"
+        install_check  = @(
+            (Join-Path $Root "app"),
+            (Join-Path $Root "venv"),
+            (Join-Path $Root "data"),
+            (Join-Path $Venv "Scripts\pythonw.exe")
+        )
+        spawn = @{
+            exe  = $spawnExe
+            args = @("-m", "node.main", "--data-dir", $Data)
+            cwd  = $App
+            env  = @{ PYTHONPATH = (Join-Path $Venv "Lib\site-packages") }
+        }
+        health          = @{ endpoint = "/api/overview" }
+        ready_timeout_ms = 40000
+    }
+    $json = $launch | ConvertTo-Json -Depth 6
+    $out = Join-Path $Data "launch.json"
+    $tmp = $out + ".tmp"
+    try {
+        # P2-5：写前清残留 .tmp，避免上次失败留下的半成品被 Move 误用
+        if (Test-Path $tmp) { Remove-Item -Force $tmp }
+        if (Test-Path $out) { Copy-Item -Force $out (Join-Path $Data "launch.json.bak") }
+        [System.IO.File]::WriteAllText($tmp, $json, [System.Text.UTF8Encoding]::new($false))
+        Move-Item -Force $tmp $out
+        Write-Host ("  launch.json 已生成（spawn exe: " + $spawnExe + "）") -ForegroundColor Green
+    } catch {
+        # P2-5：写失败时清理 .tmp，绝不留半成品（回退链交给 exe 的 launch.json → .bak）
+        if (Test-Path $tmp) { Remove-Item -Force $tmp }
+        Write-Host ("  launch.json 写入失败: " + $_.Exception.Message) -ForegroundColor Yellow
+        throw
+    }
+}
+
 # ---------- 1/8 Python ----------
 Step 1 "检查 Python（需要 >= 3.10；缺失则 winget 自动装）"
 $py = Get-PythonLauncher
@@ -209,6 +262,11 @@ try {
     Step 4 "确保数据目录（保留已有身份/配置）"
     if (-not (Test-Path $DATA)) { New-Item -ItemType Directory -Path $DATA -Force | Out-Null }
     Write-Host "  数据目录: $DATA（已存在则原样保留）" -ForegroundColor Green
+
+    # ---------- 4b/8 生成 v2 启动清单 data/launch.json ----------
+    #（失败不影响安装：exe 会回退内置 C1 解析，见 launcher/launchspec.go）
+    try { Write-LaunchJson -Root $ROOT -App $APP -Venv $VENV -Data $DATA }
+    catch { Write-Host ("  launch.json 生成失败（" + $_.Exception.Message + "），启动器将回退内置逻辑") -ForegroundColor Yellow }
 
     # ---------- 5/8 CLI 命令 ----------
     Step 5 "安装命令行 agent-node（加入用户 PATH）"
