@@ -479,8 +479,9 @@ func (w *watchState) cmdCheckUpdate() {
 			return
 		}
 		// 有更新 或 本机未装/损坏需重装：确认后才跑安装脚本（D3：只提示，用户确认才更新）。
+		// 用可见控制台实时显示下载/安装进度（runInstallVerbose），而非隐藏后台。
 		if messageBox("检查更新", msg, 0x4|0x20|0x100 /*MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2*/) == 6 /*IDYES*/ {
-			if err := runInstallScript(); err != nil {
+			if err := runInstallVerbose(); err != nil {
 				messageBox("更新失败", fmt.Sprintf("更新执行失败：%v\n\n可手动执行：\n%s", err, installCmd), 0x10)
 				return
 			}

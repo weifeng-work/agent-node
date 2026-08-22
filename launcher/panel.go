@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os/exec"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -33,10 +35,24 @@ func confirmInstall() bool {
 	return r == 6 // IDYES
 }
 
-// runInstallScript 隐藏 PowerShell 执行安装脚本（D6）。
+// runInstallScript 隐藏 PowerShell 执行安装脚本（D6）。（更新时的可见版见 runInstallVerbose。）
 func runInstallScript() error {
 	return execCommand("powershell", "-NoProfile", "-NonInteractive",
 		"-WindowStyle", "Hidden", "-Command", installCmd).Run()
+}
+
+// runInstallVerbose 更新/重装用可见 PowerShell 控制台运行 install.ps1，实时显示下载/安装进度。
+// install.ps1 自身会打印 Step/下载百分比/pip 进度；结尾 cmd 的 pause 停留让用户看到结果，
+// 避免窗口随进程结束瞬间关闭。成功/失败都回到调用方再弹结果框。
+// 必须 CREATE_NEW_CONSOLE 打开新可见窗（不能用 execCommand 的隐藏窗）。
+func runInstallVerbose() error {
+	inner := "powershell -NoProfile -NonInteractive -WindowStyle Normal -Command \"" +
+		installCmd + "\""
+	cmd := exec.Command("cmd", "/c", inner+" & pause")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.CREATE_NEW_CONSOLE, // 开独立可见控制台窗，显示实时进度
+	}
+	return cmd.Run()
 }
 
 // notifyError 安装/初始化失败的用户可见报错弹窗。
