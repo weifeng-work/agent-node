@@ -46,6 +46,9 @@ type ghRelease struct {
 	TagName string `json:"tag_name"`
 }
 
+// latestReleaseTagFunc 可注入（单测替换），默认走真实 API。
+var latestReleaseTagFunc = latestReleaseTag
+
 func latestReleaseTag() (string, error) {
 	client := &http.Client{Timeout: updateTimeout}
 	resp, err := client.Get(repoLatestRelease)
@@ -63,14 +66,24 @@ func latestReleaseTag() (string, error) {
 	return strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v"), nil
 }
 
-// checkUpdate 返回 (远端版本, 本地版本, 是否有更/可更新, 人类可读 Message)。
-// hasNew=true 表示远端比本地新；eq=true 表示两版本一致；远端缺失/本地缺失走 err 与说明。
-func checkUpdate(r string) (remote, local string, hasNew bool, msg string) {
+// checkUpdate 返回 (远端版本, 本地版本, proceed, 人类可读 Message)。
+// proceed=true 表示应进入"确认→下载"流程：
+//   - 本地读不到（未安装 / app 损坏 / version.py 缺失）→ 只要远端可达就置 true，
+//     引导重新下载安装最新版（这是对本机"未安装/损坏就重下"诉求的直接实现）。
+//   - 远端比本地新 → true。
+//   - 相等 / 本地超前 / 网络失败 → false（仅提示，不发起安装）。
+func checkUpdate(r string) (remote, local string, proceed bool, msg string) {
 	local = localNodeVersion(r)
 	if local == "" {
-		return "", "", false, "无法读取本地节点版本（未安装或 version.py 缺失）。"
+		// 未安装或安装已损坏：直接唤醒"重新下载安装"流程（用户诉求）。
+		remote, err := latestReleaseTagFunc()
+		if err != nil {
+			return "", "", false, fmt.Sprintf("未检测到本地节点版本，且无法连接服务器检查最新版：%v", err)
+		}
+		return remote, "", true,
+			fmt.Sprintf("检测到本地节点未安装或文件缺失，将重新下载最新版本 v%s，是否继续？", remote)
 	}
-	remote, err := latestReleaseTag()
+	remote, err := latestReleaseTagFunc()
 	if err != nil {
 		return "", local, false, fmt.Sprintf("检查失败：%v", err)
 	}

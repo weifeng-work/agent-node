@@ -472,19 +472,23 @@ func (w *watchState) cmdRestart() {
 // 避免阻塞看门狗 run 循环（reconcile 每 3s tick 不会被拖住）。
 func (w *watchState) cmdCheckUpdate() {
 	go func() {
-		remote, _, hasNew, msg := checkUpdate(w.r)
-		if !hasNew {
-			// 无更新/失败：仅消息框告知，不发起安装。
+		remote, _, proceed, msg := checkUpdate(w.r)
+		if !proceed {
+			// 无更新/失败/无法连接：仅消息框告知，不发起安装。
 			messageBox("检查更新", msg, 0x40 /*MB_ICONINFORMATION*/)
 			return
 		}
-		// 有更新：确认后才跑安装脚本（D3：只提示，用户确认才更新）。
+		// 有更新 或 本机未装/损坏需重装：确认后才跑安装脚本（D3：只提示，用户确认才更新）。
 		if messageBox("检查更新", msg, 0x4|0x20|0x100 /*MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2*/) == 6 /*IDYES*/ {
 			if err := runInstallScript(); err != nil {
 				messageBox("更新失败", fmt.Sprintf("更新执行失败：%v\n\n可手动执行：\n%s", err, installCmd), 0x10)
 				return
 			}
-			messageBox("更新完成", "已更新到 v"+remote+"。节点将按现有规则重新拉起。", 0x40)
+			done := "已更新完成。节点将按现有规则重新拉起。"
+			if remote != "" {
+				done = "已更新到 v" + remote + "。节点将按现有规则重新拉起。"
+			}
+			messageBox("更新完成", done, 0x40)
 		}
 	}()
 }

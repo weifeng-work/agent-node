@@ -1,12 +1,50 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// ---- compareVersions ----
+// ---- checkUpdate：损坏/未装唤醒"重新下载"（注入 latestReleaseTagFunc 保证确定、不依赖网络） ----
+func TestCheckUpdate_damagedLocalBranch(t *testing.T) {
+	saved := latestReleaseTagFunc
+	latestReleaseTagFunc = func() (string, error) { return "0.2.6", nil }
+	defer func() { latestReleaseTagFunc = saved }()
+
+	root := t.TempDir() // 空 ROOT：app\node\version.py 一定缺失
+	remote, local, proceed, msg := checkUpdate(root)
+	if local != "" {
+		t.Fatalf("empty ROOT should yield local==\"\", got %q", local)
+	}
+	if !proceed {
+		t.Fatalf("local empty but remote reachable should proceed, got proceed=%v msg=%q", proceed, msg)
+	}
+	if remote != "0.2.6" {
+		t.Fatalf("remote=%q, want 0.2.6", remote)
+	}
+	if !strings.Contains(msg, "重新下载") {
+		t.Fatalf("proceed with empty local should say 重新下载, got %q", msg)
+	}
+}
+
+func TestCheckUpdate_damagedAndNoNet(t *testing.T) {
+	saved := latestReleaseTagFunc
+	latestReleaseTagFunc = func() (string, error) { return "", errors.New("net down") }
+	defer func() { latestReleaseTagFunc = saved }()
+
+	root := t.TempDir()
+	_, _, proceed, msg := checkUpdate(root)
+	if proceed {
+		t.Fatalf("no-net damaged should not proceed, got msg=%q", msg)
+	}
+	if !strings.Contains(msg, "无法连接服务器") {
+		t.Fatalf("no-net damaged should report network failure, got %q", msg)
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
 	cases := []struct {
 		a, b string
